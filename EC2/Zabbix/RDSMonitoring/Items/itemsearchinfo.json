@@ -1,0 +1,14 @@
+{
+    "jsonrpc": "2.0",
+    "method": "item.get",
+    "params": {
+    "hostids": "10107",
+    "output": "extend",
+    "search": {
+          "name": "$SEARCHKEY"
+    },
+    "sortfield": "name"
+    },
+    "auth": "3d2f6c425d74e6779a910a9fe572d653",
+    "id": 1
+}

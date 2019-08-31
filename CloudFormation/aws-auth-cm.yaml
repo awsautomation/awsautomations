@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+data:
+  mapRoles: |
+    - rolearn: arn:aws:iam::535095460051:role/CustomerOrganizationAccountAccessRole
+      username: system:node:{{EC2PrivateDNSName}}
+      groups:
+        - system:bootstrappers
+        - system:nodes
+    - rolearn: arn:aws:iam::535095460051:role/OrganizationAccountAccessRole
+      username: system:node:{{EC2PrivateDNSName}}
+      groups:
+        - system:bootstrappers
+        - system:nodes
+  mapAccounts: |
+    - "535095460051"

@@ -1,0 +1,41 @@
+{
+    "jsonrpc": "2.0",
+    "method": "graph.create",
+    "params": {
+        "name": "$NAME Page",
+        "width": 900,
+        "height": 400,
+	"show_work_period": "1",
+	"show_triggers": "0",
+	"graphtype": "0",
+	"show_legend": "1",
+        "gitems": [
+            {
+                "itemid": "$TOTALFFOX",
+		"calc_fnc": "7",
+		"drawtype": "2",
+                "color": "FFFF33"
+            },
+            {
+                "itemid": "$FFOX17",
+                "calc_fnc": "7",
+                "drawtype": "2",
+                "color": "0000AA"
+            },
+            {
+                "itemid": "$FFOX24",
+                "calc_fnc": "7",
+                "drawtype": "2",
+                "color": "00AA00"
+            },
+            {
+                "itemid": "$FFOX35",
+                "calc_fnc": "7",
+                "drawtype": "2",
+                "color": "AA0000"
+            }
+        ]
+    },
+    "auth": "3d2f6c425d74e6779a910a9fe572d653",
+    "id": 1
+}

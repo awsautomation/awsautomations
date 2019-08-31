@@ -1,0 +1,33 @@
+{
+    "TimePeriod": {
+        "Start": "2018-10-06",
+        "End": "2018-10-08"
+    },
+    "Granularity": "DAILY",
+    "Filter": {
+        "Dimensions": {
+            "Key": "RECORD_TYPE",
+            "Values": [
+                "Refund",
+                "Upfront",
+                "Recurring",
+                "Tax",
+                "Support",
+                "Usage",
+                "DiscountedUsage",
+                "Other"
+            ]
+        }
+    },
+    "Metrics": [
+        "AmortizedCost",
+    "UnblendedCost" 
+    ],
+    "GroupBy": [
+        {
+            "Type": "DIMENSION",
+            "Key": "LINKED_ACCOUNT"
+        }
+    ]
+}
+

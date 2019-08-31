@@ -1,0 +1,740 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Create Full AWS Resources for Customer
+Parameters:
+  VPCCidrBlock:
+    Type: String
+    Description: CIDR block for VPC to deploy. (X.X.X.X/X)
+    AllowedPattern: >-
+      ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(/([0-9]|[1-2][0-9]|3[0-2]))$
+    Default: 10.0.0.0/16
+  PublicSubnetCIDR1:
+    Type: String
+    Description: First public subnet CIDR to deploy Amazon Aurora Cluster into
+    AllowedPattern: >-
+      ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(/([0-9]|[1-2][0-9]|3[0-2]))$
+    Default: 10.0.1.0/24
+  PublicSubnetCIDR2:
+    Type: String
+    Description: Second public subnet CIDR to deploy Amazon Aurora Cluster into
+    AllowedPattern: >-
+      ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(/([0-9]|[1-2][0-9]|3[0-2]))$
+    Default: 10.0.2.0/24
+  PrivateSubnetCIDR1:
+    Type: String
+    Description: First private subnet CIDR to deploy Amazon RDS SQL Server into
+    AllowedPattern: >-
+      ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(/([0-9]|[1-2][0-9]|3[0-2]))$
+    Default: 10.0.3.0/24
+  PrivateSubnetCIDR2:
+    Type: String
+    Description: Second private subnet CIDR to deploy Amazon RDS SQL Server into
+    AllowedPattern: >-
+      ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(/([0-9]|[1-2][0-9]|3[0-2]))$
+    Default: 10.0.4.0/24
+  Cloud9:
+    Type: String
+    Description: true - with cloud9/false - without cloud9
+    Default: false
+  NatGw:
+    Type: String
+    Description: true - with NatGWs/false - without NatGWs
+    Default: false
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: Network Configuration
+        Parameters:
+          - VPCCidrBlock
+          - PublicSubnetCIDR1
+          - PublicSubnetCIDR2
+          - PrivateSubnetCIDR1
+          - PrivateSubnetCIDR2
+    ParameterLabels:
+      VPCID:
+        default: Which VPC should this be deployed to?
+  'AWS::CloudFormation::Designer':
+    7b11b0f3-f6e5-4414-bab4-103917aca27d:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 1200
+        'y': 420
+      z: 3
+      parent: dffec079-d0f7-4da9-b8c3-0a69c70dc4bf
+      embeds: []
+    1be7efe2-4acf-4911-a0cd-d0d3fc73f108:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 840
+        'y': 420
+      z: 3
+      parent: f61b48cb-165e-4db8-b04b-2286e243ebd6
+      embeds: []
+    ccbf003e-1d6d-44ee-9c5b-ef1f62622c6e:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 990
+        'y': -130
+      z: 0
+      embeds: []
+    b5dfa1c6-df0d-4946-95e7-e83657b7e7dd:
+      size:
+        width: 600
+        height: 1010
+      position:
+        x: 740
+        'y': -20
+      z: 1
+      embeds:
+        - bf06ac60-cbd4-4a2f-ab9f-0a71fe575968
+        - b57667d9-2e6d-46fb-919b-69139afed5de
+        - dffec079-d0f7-4da9-b8c3-0a69c70dc4bf
+        - f61b48cb-165e-4db8-b04b-2286e243ebd6
+        - 03ff86a1-cc25-4506-bc4c-2e375e60a6be
+        - 38f548ca-4b07-4d2e-b5c7-074bcd0750d1
+        - ba3362a5-e952-4802-a93d-5f67c54fec0d
+    bf06ac60-cbd4-4a2f-ab9f-0a71fe575968:
+      size:
+        width: 130
+        height: 120
+      position:
+        x: 1050
+        'y': 610
+      z: 2
+      parent: b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+      embeds:
+        - 2f3a5cfd-07de-428e-8822-7a010a09b734
+      iscontainedinside:
+        - b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+        - b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+        - b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+    b57667d9-2e6d-46fb-919b-69139afed5de:
+      size:
+        width: 130
+        height: 120
+      position:
+        x: 900
+        'y': 610
+      z: 2
+      parent: b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+      embeds:
+        - ef76fd95-1b6f-470e-beb3-e5b9571b8eff
+      iscontainedinside:
+        - b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+        - b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+        - b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+    ba3362a5-e952-4802-a93d-5f67c54fec0d:
+      size:
+        width: 240
+        height: 240
+      position:
+        x: 930
+        'y': 10
+      z: 2
+      parent: b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+      embeds:
+        - a2aa8952-8af1-4deb-9a2d-29e6d23bd2fd
+      iscontainedinside:
+        - b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+        - b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+    a2aa8952-8af1-4deb-9a2d-29e6d23bd2fd:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 960
+        'y': 70
+      z: 3
+      parent: ba3362a5-e952-4802-a93d-5f67c54fec0d
+      embeds: []
+      isassociatedwith:
+        - ccbf003e-1d6d-44ee-9c5b-ef1f62622c6e
+      iscontainedinside:
+        - ba3362a5-e952-4802-a93d-5f67c54fec0d
+        - ba3362a5-e952-4802-a93d-5f67c54fec0d
+        - ba3362a5-e952-4802-a93d-5f67c54fec0d
+    dffec079-d0f7-4da9-b8c3-0a69c70dc4bf:
+      size:
+        width: 240
+        height: 240
+      position:
+        x: 1050
+        'y': 320
+      z: 2
+      parent: b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+      embeds:
+        - 7b11b0f3-f6e5-4414-bab4-103917aca27d
+        - 9b703602-00ab-416c-b385-66eed7400e12
+      iscontainedinside:
+        - b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+        - b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+        - b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+    c46138e7-4cc4-4244-b6f6-77c914191d1c:
+      source:
+        id: ba3362a5-e952-4802-a93d-5f67c54fec0d
+      target:
+        id: dffec079-d0f7-4da9-b8c3-0a69c70dc4bf
+      z: 0
+    9b703602-00ab-416c-b385-66eed7400e12:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 1090
+        'y': 420
+      z: 3
+      parent: dffec079-d0f7-4da9-b8c3-0a69c70dc4bf
+      embeds: []
+      iscontainedinside:
+        - dffec079-d0f7-4da9-b8c3-0a69c70dc4bf
+        - dffec079-d0f7-4da9-b8c3-0a69c70dc4bf
+        - dffec079-d0f7-4da9-b8c3-0a69c70dc4bf
+    2f3a5cfd-07de-428e-8822-7a010a09b734:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 1090
+        'y': 640
+      z: 3
+      parent: bf06ac60-cbd4-4a2f-ab9f-0a71fe575968
+      embeds: []
+      isassociatedwith:
+        - 9b703602-00ab-416c-b385-66eed7400e12
+      iscontainedinside:
+        - bf06ac60-cbd4-4a2f-ab9f-0a71fe575968
+        - bf06ac60-cbd4-4a2f-ab9f-0a71fe575968
+        - bf06ac60-cbd4-4a2f-ab9f-0a71fe575968
+    f61b48cb-165e-4db8-b04b-2286e243ebd6:
+      size:
+        width: 240
+        height: 240
+      position:
+        x: 790
+        'y': 320
+      z: 2
+      parent: b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+      embeds:
+        - 1be7efe2-4acf-4911-a0cd-d0d3fc73f108
+        - 8787860e-dd13-49b6-b3ca-425465bd30a5
+      iscontainedinside:
+        - b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+        - b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+        - b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+    580f7319-614d-4c49-8a6c-97680995fd6e:
+      source:
+        id: ba3362a5-e952-4802-a93d-5f67c54fec0d
+      target:
+        id: f61b48cb-165e-4db8-b04b-2286e243ebd6
+      z: 0
+    8787860e-dd13-49b6-b3ca-425465bd30a5:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 940
+        'y': 420
+      z: 3
+      parent: f61b48cb-165e-4db8-b04b-2286e243ebd6
+      embeds: []
+      iscontainedinside:
+        - f61b48cb-165e-4db8-b04b-2286e243ebd6
+        - f61b48cb-165e-4db8-b04b-2286e243ebd6
+        - f61b48cb-165e-4db8-b04b-2286e243ebd6
+    ef76fd95-1b6f-470e-beb3-e5b9571b8eff:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 940
+        'y': 640
+      z: 3
+      parent: b57667d9-2e6d-46fb-919b-69139afed5de
+      embeds: []
+      isassociatedwith:
+        - 8787860e-dd13-49b6-b3ca-425465bd30a5
+      iscontainedinside:
+        - b57667d9-2e6d-46fb-919b-69139afed5de
+        - b57667d9-2e6d-46fb-919b-69139afed5de
+    03ff86a1-cc25-4506-bc4c-2e375e60a6be:
+      size:
+        width: 150
+        height: 150
+      position:
+        x: 1050
+        'y': 820
+      z: 2
+      parent: b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+      embeds: []
+      iscontainedinside:
+        - b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+        - b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+        - b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+    3d396806-78a8-4ea3-a297-30bafce75f97:
+      source:
+        id: bf06ac60-cbd4-4a2f-ab9f-0a71fe575968
+      target:
+        id: 03ff86a1-cc25-4506-bc4c-2e375e60a6be
+      z: 2
+    38f548ca-4b07-4d2e-b5c7-074bcd0750d1:
+      size:
+        width: 150
+        height: 150
+      position:
+        x: 880
+        'y': 820
+      z: 2
+      parent: b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+      embeds: []
+      iscontainedinside:
+        - b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+        - b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+        - b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+    92c65a2b-afed-4ad0-b501-63df7512e3a0:
+      source:
+        id: b57667d9-2e6d-46fb-919b-69139afed5de
+      target:
+        id: 38f548ca-4b07-4d2e-b5c7-074bcd0750d1
+      z: 2
+    bfd2fe0b-5e3d-4747-9d33-680b35ed39e7:
+      source:
+        id: b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+      target:
+        id: ccbf003e-1d6d-44ee-9c5b-ef1f62622c6e
+      z: 1
+Conditions:
+  NatGwOn: 
+    !Equals [!Ref NatGw, true]
+  NatGwOff: 
+    !Equals [!Ref NatGw, false]
+  Cloud9On: 
+    !Equals [!Ref Cloud9, true]
+Resources:
+  VPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: !Ref VPCCidrBlock
+      EnableDnsSupport: 'true'
+      EnableDnsHostnames: 'true'
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: Customer VPC
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: b5dfa1c6-df0d-4946-95e7-e83657b7e7dd
+  InternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: Internet Gateway
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: ccbf003e-1d6d-44ee-9c5b-ef1f62622c6e
+  InternetGatewayAttachment:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: bfd2fe0b-5e3d-4747-9d33-680b35ed39e7
+  WithoutNatGwPrivateSubnet1:
+    Type: 'AWS::EC2::Subnet'
+    Condition: NatGwOff
+    Properties:
+      CidrBlock: !Ref PrivateSubnetCIDR1
+      AvailabilityZone: !Select
+        - '0'
+        - !GetAZs ''
+      MapPublicIpOnLaunch: 'false'
+      Tags:
+        - Key: Name
+          Value: Private Subnet 1
+      VpcId: !Ref VPC
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 38f548ca-4b07-4d2e-b5c7-074bcd0750d1
+  WithoutNatGwPrivateSubnet2:
+    Condition: NatGwOff
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      CidrBlock: !Ref PrivateSubnetCIDR2
+      AvailabilityZone: !Select
+        - '1'
+        - !GetAZs ''
+      MapPublicIpOnLaunch: 'false'
+      Tags:
+        - Key: Name
+          Value: Private Subnet 2
+      VpcId: !Ref VPC
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 03ff86a1-cc25-4506-bc4c-2e375e60a6be
+  WithoutNatGwPublicSubnet1:
+    Type: 'AWS::EC2::Subnet'
+    Condition: NatGwOff
+    Properties:
+      CidrBlock: !Ref PublicSubnetCIDR1
+      AvailabilityZone: !Select
+        - '0'
+        - !GetAZs ''
+      MapPublicIpOnLaunch: 'false'
+      Tags:
+        - Key: Name
+          Value: Public Subnet 1
+        - Key: farSubnet
+          Value: true
+      VpcId: !Ref VPC
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: f61b48cb-165e-4db8-b04b-2286e243ebd6
+  WithoutNatGwPublicSubnet2:
+    Type: 'AWS::EC2::Subnet'
+    Condition: NatGwOff
+    Properties:
+      CidrBlock: !Ref PublicSubnetCIDR2
+      AvailabilityZone: !Select
+        - '1'
+        - !GetAZs ''
+      MapPublicIpOnLaunch: 'false'
+      Tags:
+        - Key: Name
+          Value: Public Subnet 2
+        - Key: farSubnet
+          Value: true
+      VpcId: !Ref VPC
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: dffec079-d0f7-4da9-b8c3-0a69c70dc4bf
+  WithNatGwPrivateSubnet1:
+    Type: 'AWS::EC2::Subnet'
+    Condition: NatGwOn
+    Properties:
+      CidrBlock: !Ref PrivateSubnetCIDR1
+      AvailabilityZone: !Select
+        - '0'
+        - !GetAZs ''
+      MapPublicIpOnLaunch: 'false'
+      Tags:
+        - Key: Name
+          Value: Private Subnet 1
+        - Key: farSubnet
+          Value: true
+      VpcId: !Ref VPC
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 38f548ca-4b07-4d2e-b5c7-074bcd0750d1
+  WithNatGwPrivateSubnet2:
+    Type: 'AWS::EC2::Subnet'
+    Condition: NatGwOn
+    Properties:
+      CidrBlock: !Ref PrivateSubnetCIDR2
+      AvailabilityZone: !Select
+        - '1'
+        - !GetAZs ''
+      MapPublicIpOnLaunch: 'false'
+      Tags:
+        - Key: Name
+          Value: Private Subnet 2
+        - Key: farSubnet
+          Value: true
+      VpcId: !Ref VPC
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 03ff86a1-cc25-4506-bc4c-2e375e60a6be
+  WithNatGwPublicSubnet1:
+    Type: 'AWS::EC2::Subnet'
+    Condition: NatGwOn
+    Properties:
+      CidrBlock: !Ref PublicSubnetCIDR1
+      AvailabilityZone: !Select
+        - '0'
+        - !GetAZs ''
+      MapPublicIpOnLaunch: 'false'
+      Tags:
+        - Key: Name
+          Value: Public Subnet 1
+      VpcId: !Ref VPC
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: f61b48cb-165e-4db8-b04b-2286e243ebd6
+  WithNatGwPublicSubnet2:
+    Type: 'AWS::EC2::Subnet'
+    Condition: NatGwOn
+    Properties:
+      CidrBlock: !Ref PublicSubnetCIDR2
+      AvailabilityZone: !Select
+        - '1'
+        - !GetAZs ''
+      MapPublicIpOnLaunch: 'false'
+      Tags:
+        - Key: Name
+          Value: Public Subnet 2
+      VpcId: !Ref VPC
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: dffec079-d0f7-4da9-b8c3-0a69c70dc4bf
+  SecurityGroup1:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupName: defaultSG
+      GroupDescription: defaultSG
+      Tags:
+        - Key: farSecurityGroup
+          Value: true
+      VpcId: !Ref VPC
+  OutboundRule:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      IpProtocol: -1
+      CidrIp: "0.0.0.0/0"
+      GroupId: !Ref SecurityGroup1
+  Cloud9EIP:
+    Type: 'AWS::EC2::EIP'
+    Condition: Cloud9On
+    DeletionPolicy : "Retain"
+    Properties:
+      Domain: vpc
+  NatGatewayEIP1:
+    Type: 'AWS::EC2::EIP'
+    Condition: NatGwOn
+    DeletionPolicy : "Retain"
+    Properties:
+      Domain: vpc
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 1be7efe2-4acf-4911-a0cd-d0d3fc73f108
+  NatGateway1:
+    Type: 'AWS::EC2::NatGateway'
+    Condition: NatGwOn
+    Properties:
+      AllocationId: !GetAtt
+        - NatGatewayEIP1
+        - AllocationId
+      SubnetId: !Ref WithNatGwPublicSubnet1
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 8787860e-dd13-49b6-b3ca-425465bd30a5
+  NatGatewayEIP2:
+    Type: 'AWS::EC2::EIP'
+    Condition: NatGwOn
+    DeletionPolicy : "Retain"
+    Properties:
+      Domain: vpc
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 7b11b0f3-f6e5-4414-bab4-103917aca27d
+  NatGateway2:
+    Type: 'AWS::EC2::NatGateway'
+    Condition: NatGwOn
+    Properties:
+      AllocationId: !GetAtt
+        - NatGatewayEIP2
+        - AllocationId
+      SubnetId: !Ref WithNatGwPublicSubnet2
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 9b703602-00ab-416c-b385-66eed7400e12
+  PublicRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: Public Route Table
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: ba3362a5-e952-4802-a93d-5f67c54fec0d
+  WithoutNatGwAttachPublicSubnet1RouteTable:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Condition: NatGwOff
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref WithoutNatGwPublicSubnet1
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 580f7319-614d-4c49-8a6c-97680995fd6e
+  WithoutNatGwAttachPublicSubnet2RouteTable:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Condition: NatGwOff
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref WithoutNatGwPublicSubnet2
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: c46138e7-4cc4-4244-b6f6-77c914191d1c
+  WithNatGwAttachPublicSubnet1RouteTable:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Condition: NatGwOn
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref WithNatGwPublicSubnet1
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 580f7319-614d-4c49-8a6c-97680995fd6e
+  WithNatGwAttachPublicSubnet2RouteTable:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Condition: NatGwOn
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref WithNatGwPublicSubnet2
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: c46138e7-4cc4-4244-b6f6-77c914191d1c
+  PublicRoutetoInternet:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref PublicRouteTable
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: a2aa8952-8af1-4deb-9a2d-29e6d23bd2fd
+  PrivateRouteTable1:
+    Type: 'AWS::EC2::RouteTable'
+    Condition: NatGwOn
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: Private Route Table 1
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: b57667d9-2e6d-46fb-919b-69139afed5de
+  AttachPrivateSubnet1RouteTable1:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Condition: NatGwOn
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      SubnetId: !Ref WithNatGwPrivateSubnet1
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 92c65a2b-afed-4ad0-b501-63df7512e3a0
+  PrivateRoutetoNatGateway1:
+    Type: 'AWS::EC2::Route'
+    Condition: NatGwOn
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway1
+      RouteTableId: !Ref PrivateRouteTable1
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: ef76fd95-1b6f-470e-beb3-e5b9571b8eff
+  PrivateRouteTable2:
+    Type: 'AWS::EC2::RouteTable'
+    Condition: NatGwOn
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: Private Route Table 2
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: bf06ac60-cbd4-4a2f-ab9f-0a71fe575968
+  AttachPrivateSubnet2RouteTable2:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Condition: NatGwOn
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      SubnetId: !Ref WithNatGwPrivateSubnet2
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 3d396806-78a8-4ea3-a297-30bafce75f97
+  PrivateRoutetoNatGateway2:
+    Type: 'AWS::EC2::Route'
+    Condition: NatGwOn
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway2
+      RouteTableId: !Ref PrivateRouteTable2
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 2f3a5cfd-07de-428e-8822-7a010a09b734
+  ecsTasksRole:
+    Type: AWS::IAM::Role
+    Properties :
+      AssumeRolePolicyDocument :
+        Version: "2012-10-17"
+        Statement :
+          -
+            Effect : Allow
+            Principal :
+              Service :
+                - "ecs-tasks.amazonaws.com"
+            Action :
+              - "sts:AssumeRole"
+      Path : "/"
+      ManagedPolicyArns :
+        - "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+      RoleName: ecsTaskExecutionRole
+  CustomerTasksRole:
+    Type: AWS::IAM::Role
+    Properties :
+      AssumeRolePolicyDocument :
+        Version: "2012-10-17"
+        Statement :
+          -
+            Effect : Allow
+            Principal :
+              AWS :
+                - "arn:aws:iam::301206952450:root"
+                - "arn:aws:iam::507686342620:root"
+                - "arn:aws:iam::565256583383:root"
+            Action :
+              - "sts:AssumeRole"
+      Path : "/"
+      Policies :
+        -
+          PolicyName: "AdministratorAccess"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect : "Allow"
+                Action : "*"
+                Resource : "*"
+      RoleName: CustomerOrganizationAccountAccessRole
+  farTasksRole:
+    Type: AWS::IAM::Role
+    Properties :
+      AssumeRolePolicyDocument :
+        Version: "2012-10-17"
+        Statement :
+          -
+            Effect : Allow
+            Principal :
+              Service :
+                - "ecs-tasks.amazonaws.com"
+            Action :
+              - "sts:AssumeRole"
+      Path : "/"
+      Policies :
+        -
+          PolicyName: "ReadSecrets"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect : "Allow"
+                Action : "secretsmanager:GetSecretValue"
+                Resource : "arn:aws:secretsmanager:*:*:secret:*"
+      RoleName: far-tasks
+Outputs:
+  VPCID:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: !Sub '${AWS::StackName}-VPCID'
+  VPCCidrBlock:
+    Description: VPC Cidr Block
+    Value: !Ref VPCCidrBlock
+    Export:
+      Name: !Sub '${AWS::StackName}-VPCCidrBlock'

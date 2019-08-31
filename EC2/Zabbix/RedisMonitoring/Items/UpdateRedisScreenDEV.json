@@ -1,0 +1,17 @@
+{
+    "jsonrpc": "2.0",
+    "method": "screenitem.updatebyposition",
+    "params": [ 
+        {
+            "screenid": "444",
+            "x": "$COL",
+            "y": "$ROW",
+            "resourceid": "$GRAPH",
+            "resourcetype": "0",
+	        "height": "400",
+            "width": "900"
+        }
+	],
+    "auth": "3d2f6c425d74e6779a910a9fe572d653",
+    "id": 1
+}

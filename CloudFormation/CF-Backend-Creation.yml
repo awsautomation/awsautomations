@@ -1,0 +1,3570 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: A stack for deploying containerized applications onto a cluster of EC2
+             hosts using Elastic Container Service. This stack runs containers on
+             hosts that are in a private VPC subnet. Outbound network traffic from the
+             hosts must go out through a NAT gateway. There are two load balancers, one
+             inside the public subnet, which can be used to send traffic to the
+             containers in the private subnet, and one in the private subnet, which can
+             be used for private internal traffic between internal services.
+Parameters:
+  MaxSize:
+    Type: Number
+    Default: '6'
+    Description: Maximum number of EC2 instances that can be launched in your ECS cluster.
+  Region:
+    Type: String
+    Description: AWS Region
+  ClusterName:
+    Type: String
+    Description: Clusters name
+  Env:
+    Type: String
+    Description: The environment - development/test/production
+  ECSAMI:
+    Description: AMI ID
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ecs/optimized-ami/amazon-linux-2/recommended/image_id
+  InstanceType:
+    Description: EC2 instance type
+    Type: String
+    Default: c4.xlarge
+    AllowedValues: [t2.micro, t2.small, t2.medium, t2.large, m3.medium, m3.large,
+      m3.xlarge, m3.2xlarge, m4.large, m4.xlarge, m4.2xlarge, m4.4xlarge, m4.10xlarge,
+      c4.large, c4.xlarge, c4.2xlarge, c4.4xlarge, c4.8xlarge, c3.large, c3.xlarge,
+      c3.2xlarge, c3.4xlarge, c3.8xlarge, r3.large, r3.xlarge, r3.2xlarge, r3.4xlarge,
+      r3.8xlarge, i2.xlarge, i2.2xlarge, i2.4xlarge, i2.8xlarge]
+    ConstraintDescription: Please choose a valid instance type.
+  DomainName:
+    Description: The domain's name, e.g approvesimple.com
+    Type: String
+Mappings:
+  # Hard values for the subnet masks. These masks define
+  # the range of internal IP addresses that can be assigned.
+  # The VPC can have all IP's from 10.0.0.0 to 10.0.255.255
+  # There are four subnets which cover the ranges:
+  #
+  # 10.0.0.0 - 10.0.0.255
+  # 10.0.1.0 - 10.0.1.255
+  # 10.0.2.0 - 10.0.2.255
+  # 10.0.3.0 - 10.0.3.255
+  #
+  # If you need more IP addresses (perhaps you have so many
+  # instances that you run out) then you can customize these
+  # ranges to add more
+  SubnetConfig:
+    VPC:
+      CIDR: '10.0.0.0/16'
+    PublicOne:
+      CIDR: '10.0.0.0/24'
+    PublicTwo:
+      CIDR: '10.0.2.0/24'
+    PublicThree:
+      CIDR: '10.0.4.0/24'
+    PrivateOne:
+      CIDR: '10.0.1.0/24'
+    PrivateTwo:
+      CIDR: '10.0.3.0/24'
+    PrivateThree:
+      CIDR: '10.0.5.0/24'
+    RDSPrivateOne:
+      CIDR: '10.0.6.0/24'
+    RDSPrivateTwo:
+      CIDR: '10.0.7.0/24'
+    RedisPrivateOne:
+      CIDR: '10.0.8.0/24'
+    RedisPrivateTwo:
+      CIDR: '10.0.9.0/24'
+Resources:
+  # VPC in which containers will be networked.
+  # It has two public subnets, and two private subnets.
+  # We distribute the subnets across the first two available subnets
+  # for the region, for high availability.
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      CidrBlock: !FindInMap ['SubnetConfig', 'VPC', 'CIDR']
+
+  # Two public subnets, where containers can have public IP addresses
+  PublicSubnetOne:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+         Fn::Select:
+         - 0
+         - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref 'VPC'
+      CidrBlock: !FindInMap ['SubnetConfig', 'PublicOne', 'CIDR']
+      MapPublicIpOnLaunch: true
+      Tags:
+        -
+          Key: Name
+          Value: PublicSubnet1
+  PublicSubnetTwo:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+         Fn::Select:
+         - 1
+         - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref 'VPC'
+      CidrBlock: !FindInMap ['SubnetConfig', 'PublicTwo', 'CIDR']
+      MapPublicIpOnLaunch: true
+      Tags:
+        -
+          Key: Name
+          Value: PublicSubnet2
+  PublicSubnetThree:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+         Fn::Select:
+         - 2
+         - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref 'VPC'
+      CidrBlock: !FindInMap ['SubnetConfig', 'PublicThree', 'CIDR']
+      MapPublicIpOnLaunch: true
+      Tags:
+        -
+          Key: Name
+          Value: PublicSubnet3
+
+  # Two private subnets where containers will only have private
+  # IP addresses, and will only be reachable by other members of the
+  # VPC
+  PrivateSubnetOne:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+         Fn::Select:
+         - 0
+         - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref 'VPC'
+      CidrBlock: !FindInMap ['SubnetConfig', 'PrivateOne', 'CIDR']
+      Tags:
+        -
+          Key: Name
+          Value: PrivateSubnet1
+  PrivateSubnetTwo:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+         Fn::Select:
+         - 1
+         - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref 'VPC'
+      CidrBlock: !FindInMap ['SubnetConfig', 'PrivateTwo', 'CIDR']
+      Tags:
+        -
+          Key: Name
+          Value: PrivateSubnet2
+  PrivateSubnetThree:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+         Fn::Select:
+         - 2
+         - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref 'VPC'
+      CidrBlock: !FindInMap ['SubnetConfig', 'PrivateThree', 'CIDR']
+      Tags:
+        -
+          Key: Name
+          Value: PrivateSubnet3
+  RdsPrivateSubnetOne:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+         Fn::Select:
+         - 0
+         - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref 'VPC'
+      CidrBlock: !FindInMap ['SubnetConfig', 'RDSPrivateOne', 'CIDR']
+      Tags:
+        -
+          Key: Name
+          Value: RDSPrivate1
+  RdsPrivateSubnetTwo:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+         Fn::Select:
+         - 1
+         - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref 'VPC'
+      CidrBlock: !FindInMap ['SubnetConfig', 'RDSPrivateTwo', 'CIDR']
+      Tags:
+        -
+          Key: Name
+          Value: RDSPrivate2
+  RedisPrivateSubnetOne:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+         Fn::Select:
+         - 0
+         - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref 'VPC'
+      CidrBlock: !FindInMap ['SubnetConfig', 'RedisPrivateOne', 'CIDR']
+      Tags:
+        -
+          Key: Name
+          Value: RedisPrivate1
+  RedisPrivateSubnetTwo:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+         Fn::Select:
+         - 1
+         - Fn::GetAZs: {Ref: 'AWS::Region'}
+      VpcId: !Ref 'VPC'
+      CidrBlock: !FindInMap ['SubnetConfig', 'RedisPrivateTwo', 'CIDR']
+      Tags:
+        -
+          Key: Name
+          Value: RedisPrivate2
+
+  # Setup networking resources for the public subnets. Containers
+  # in the public subnets have public IP addresses and the routing table
+  # sends network traffic via the internet gateway.
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  GatewayAttachement:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref 'VPC'
+      InternetGatewayId: !Ref 'InternetGateway'
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref 'VPC'
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachement
+    Properties:
+      RouteTableId: !Ref 'PublicRouteTable'
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref 'InternetGateway'
+  PublicSubnetOneRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetOne
+      RouteTableId: !Ref PublicRouteTable
+  PublicSubnetTwoRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetTwo
+      RouteTableId: !Ref PublicRouteTable
+
+  # Setup networking resources for the private subnets. Containers
+  # in these subnets have only private IP addresses, and must use a NAT
+  # gateway to talk to the internet. We launch two NAT gateways, one for
+  # each private subnet.
+  NatGatewayOneAttachment:
+    Type: AWS::EC2::EIP
+    DependsOn: GatewayAttachement
+    Properties:
+        Domain: vpc
+  NatGatewayTwoAttachment:
+    Type: AWS::EC2::EIP
+    DependsOn: GatewayAttachement
+    Properties:
+        Domain: vpc
+  NatGatewayOne:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayOneAttachment.AllocationId
+      SubnetId: !Ref PublicSubnetOne
+    DependsOn: NatGatewayOneAttachment
+  NatGatewayTwo:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayTwoAttachment.AllocationId
+      SubnetId: !Ref PublicSubnetTwo
+    DependsOn: NatGatewayTwoAttachment
+  PrivateRouteTableOne:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref 'VPC'
+  PrivateRouteOne:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableOne
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayOne
+    DependsOn: NatGatewayOne
+  PrivateRouteTableOneAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableOne
+      SubnetId: !Ref PrivateSubnetOne
+    DependsOn:
+      - PrivateRouteTableOne
+      - PrivateSubnetOne
+  RdsPrivateRouteTableOneAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableOne
+      SubnetId: !Ref RdsPrivateSubnetOne
+    DependsOn:
+      - PrivateRouteTableOne
+      - RdsPrivateSubnetOne
+  RedisPrivateRouteTableOneAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableOne
+      SubnetId: !Ref RedisPrivateSubnetOne
+    DependsOn:
+      - PrivateRouteTableOne
+      - RedisPrivateSubnetOne
+  PrivateRouteTableTwo:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref 'VPC'
+  PrivateRouteTwo:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableTwo
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayTwo
+    DependsOn:
+      - PrivateRouteTableTwo
+      - NatGatewayTwo
+  PrivateRouteTableTwoAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableTwo
+      SubnetId: !Ref PrivateSubnetTwo
+    DependsOn:
+      - PrivateRouteTableTwo
+      - PrivateSubnetTwo
+  RdsPrivateRouteTableTwoAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableTwo
+      SubnetId: !Ref RdsPrivateSubnetTwo
+    DependsOn:
+      - PrivateRouteTableTwo
+      - RdsPrivateSubnetTwo
+  RedisPrivateRouteTableTwoAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableTwo
+      SubnetId: !Ref RedisPrivateSubnetTwo
+    DependsOn:
+      - PrivateRouteTableTwo
+      - RedisPrivateSubnetTwo
+
+  # ECS Resources
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref 'ClusterName'
+
+  # A security group for the EC2 hosts that will run the containers.
+  # Two rules, allowing network traffic from a public facing load
+  # balancer and from other hosts in the security group.
+  #
+  # Remove any of the following ingress rules that are not needed.
+  # If you want to make direct requests to a container using its
+  # public IP address you'll need to add a security group rule
+  # to allow traffic from all IP addresses.
+  EcsHostSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Access to the ECS hosts that run containers
+      VpcId: !Ref 'VPC'
+      GroupName: VPC
+    DependsOn: VPC
+  EcsSecurityGroupIngressFromILOffice:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Ingress from IL Office Public IP Address
+      GroupId: !Ref 'EcsHostSecurityGroup'
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      CidrIp: '199.203.79.25/32'
+    DependsOn: EcsHostSecurityGroup
+  EcsSecurityGroupIngressFromPrivateALB:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Ingress from VPCs CIDR
+      GroupId: !Ref 'EcsHostSecurityGroup'
+      IpProtocol: -1
+      CidrIp: !FindInMap ['SubnetConfig', 'VPC', 'CIDR']
+    DependsOn: EcsHostSecurityGroup
+  EcsSecurityGroupIngressFromSelf:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Ingress from other containers in the same security group
+      GroupId: !Ref 'EcsHostSecurityGroup'
+      IpProtocol: -1
+      CidrIp: '10.0.0.0/16'
+    DependsOn: EcsHostSecurityGroup
+
+  # Autoscaling group. This launches the actual EC2 instances that will register
+  # themselves as members of the cluster, and run the docker containers.
+  ECSAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnetOne
+        - !Ref PrivateSubnetTwo
+        - !Ref PrivateSubnetThree
+      LaunchConfigurationName: !Ref 'ContainerInstances'
+      MinSize: '0'
+      MaxSize: !Ref 'MaxSize'
+      DesiredCapacity: 0
+    CreationPolicy:
+      ResourceSignal:
+        Count: 0
+    UpdatePolicy:
+      AutoScalingReplacingUpdate:
+        WillReplace: 'true'
+  ContainerInstances:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    DependsOn: 
+      - EcsHostSecurityGroup
+      - EC2InstanceProfile
+    Properties:
+      ImageId: !Ref 'ECSAMI'
+      SecurityGroups: [!Ref 'EcsHostSecurityGroup']
+      InstanceType: !Ref 'InstanceType'
+      IamInstanceProfile: !Ref 'EC2InstanceProfile'
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          echo ECS_CLUSTER=${ECSCluster} >> /etc/ecs/ecs.config
+          yum install -y aws-cfn-bootstrap
+          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource ECSAutoScalingGroup --region ${AWS::Region}
+  AutoscalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [application-autoscaling.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+      - PolicyName: service-autoscaling
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+              - 'application-autoscaling:*'
+              - 'cloudwatch:DescribeAlarms'
+              - 'cloudwatch:PutMetricAlarm'
+              - 'ecs:DescribeServices'
+              - 'ecs:UpdateService'
+            Resource: '*'
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles: [!Ref 'EC2Role']
+    DependsOn: EC2Role
+
+  # Role for the EC2 hosts. This allows the ECS agent on the EC2 hosts
+  # to communciate with the ECS control plane, as well as download the docker
+  # images from ECR to run on your host.
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ec2.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+      - PolicyName: ecs-service
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+              - 'ecs:CreateCluster'
+              - 'ecs:DeregisterContainerInstance'
+              - 'ecs:DiscoverPollEndpoint'
+              - 'ecs:Poll'
+              - 'ecs:RegisterContainerInstance'
+              - 'ecs:StartTelemetrySession'
+              - 'ecs:Submit*'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+              - 'ecr:GetAuthorizationToken'
+              - 'ecr:BatchGetImage'
+              - 'ecr:GetDownloadUrlForLayer'
+            Resource: '*'
+
+  # Domain creation
+#  Route53Domain:
+#    Type: AWS::Route53::HostedZone
+#    Properties : 
+#      HostedZoneTags : 
+#        -
+#          Key: Name
+#          Value: !Ref 'DomainName'
+#      Name : !Ref 'DomainName'
+#      VPCs :
+#        -
+#           VPCId:
+#             !Ref 'VPC'
+#           VPCRegion:
+#             Fn::Sub: '${Region}'
+#    DependsOn: VPC
+
+
+
+  # Load balancers for getting traffic to containers.
+  # This sample template creates two load balancers:
+  #
+  # - One public load balancer, hosted in public subnets that is accessible
+  #   to the public, and is intended to route traffic to one or more public
+  #   facing services.
+  # - One private load balancer, hosted in private subnets, that only
+  #   accepts traffic from other containers in the cluster, and is
+  #   intended for private services that should not be accessed directly
+  #   by the public.
+
+  # A public facing load balancer, this is used for accepting traffic from the public
+  # internet and directing it to public facing microservices
+  PublicLoadBalancerSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Access to the LB
+      VpcId: !Ref 'VPC'
+    DependsOn: VPC  
+  EcsSecurityGroupIngressHttpFromAll:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Ingress from the whole world to the LB in port 80
+      GroupId: !Ref 'PublicLoadBalancerSG'
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      CidrIp: '0.0.0.0/0'
+    DependsOn: 
+      - VPC
+      - PublicLoadBalancerSG
+  EcsSecurityGroupIngressHttpsFromAll:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Ingress from the whole world to the LB in port 443
+      GroupId: !Ref 'PublicLoadBalancerSG'
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: '0.0.0.0/0'
+    DependsOn: 
+      - VPC
+      - PublicLoadBalancerSG
+  EcsSecurityGroupIngressAllFromCIDR:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Ingress from CIDR to the LB in all ports
+      GroupId: !Ref 'PublicLoadBalancerSG'
+      IpProtocol: -1
+      CidrIp: !FindInMap ['SubnetConfig', 'VPC', 'CIDR']
+    DependsOn: 
+      - VPC
+      - PublicLoadBalancerSG
+  EcsSecurityGroupIngressAllFromAdminSubnet:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Ingress from Admin Private Subnet in all ports
+      GroupId: !Ref 'PublicLoadBalancerSG'
+      IpProtocol: -1
+      CidrIp: '192.168.148.96/29'
+    DependsOn: 
+      - VPC
+      - PublicLoadBalancerSG
+  PublicLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: capriza-ng
+      Scheme: internet-facing
+      LoadBalancerAttributes:
+      - Key: idle_timeout.timeout_seconds
+        Value: '120'
+      Subnets:
+        # The load balancer is placed into the public subnets, so that traffic
+        # from the internet can reach the load balancer directly via the internet gateway
+        - !Ref PublicSubnetOne
+        - !Ref PublicSubnetTwo
+        - !Ref PublicSubnetThree
+      SecurityGroups: [!Ref 'PublicLoadBalancerSG']
+      Type: application
+    DependsOn: 
+      - VPC
+      - PublicLoadBalancerSG
+  # initially, before any real service target groups have been added.
+  ApiMsTargetGroupPublic:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 6
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 5
+      Name: api-ms
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 2
+      TargetType: instance
+      VpcId: !Ref 'VPC'
+    DependsOn: 
+      - VPC
+      - PublicLoadBalancer
+  AsDashboardTargetGroupPublic:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 6
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 5
+      Name: as-dashboard
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 2
+      TargetType: instance
+      VpcId: !Ref 'VPC'
+    DependsOn: 
+      - VPC
+      - PublicLoadBalancer
+  WebAppTargetGroupPublic:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 6
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 5
+      Name: web-app
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 2
+      TargetType: instance
+      VpcId: !Ref 'VPC'
+    DependsOn:
+      - VPC
+      - PublicLoadBalancer
+  MockyWebsiteTargetGroupPublic:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 6
+      HealthCheckPath: /login
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 5
+      Name: mocky-website
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 2
+      TargetType: instance
+      VpcId: !Ref 'VPC'
+    DependsOn:
+      - VPC
+      - PublicLoadBalancer
+  HttpsLoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    DependsOn:
+      - PublicLoadBalancer
+    Properties:
+      Certificates:
+        - CertificateArn: !Ref 'DomainCertificate'
+      DefaultActions:
+        - TargetGroupArn: !Ref 'ApiMsTargetGroupPublic'
+          Type: 'forward'
+      LoadBalancerArn: !Ref 'PublicLoadBalancer'
+      Port: 443
+      Protocol: HTTPS
+    DependsOn:
+      - PublicLoadBalancer
+      - ApiMsTargetGroupPublic
+      - MockyWebsiteTargetGroupPublic
+      - WebAppTargetGroupPublic
+      - AsDashboardTargetGroupPublic
+  HttpLoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    DependsOn:
+      - PublicLoadBalancer
+    Properties:
+      DefaultActions:
+        - TargetGroupArn: !Ref 'ApiMsTargetGroupPublic'
+          Type: 'forward'
+      LoadBalancerArn: !Ref 'PublicLoadBalancer'
+      Port: 80
+      Protocol: HTTP
+    DependsOn:
+      - PublicLoadBalancer
+      - ApiMsTargetGroupPublic
+  RedirectToHttpsListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties : 
+      Actions : 
+        -
+          RedirectConfig:
+            Host : '#{host}'
+            Path : '/#{path}'
+            Port : '443'
+            Protocol : 'HTTPS'
+            Query : '#{query}'
+            StatusCode : 'HTTP_301'
+          Type: redirect
+      ListenerArn: !Ref 'HttpLoadBalancerListener'
+      Conditions : 
+        -
+          Field : host-header
+          Values : 
+            -
+              Fn::Sub: "*.${DomainName}"
+      Priority : 1
+  ApiMsListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties :
+      Actions :
+        -
+          Type: forward
+          TargetGroupArn: !Ref 'ApiMsTargetGroupPublic'
+      Conditions:
+        -
+          Field: host-header
+          Values: 
+            -
+               Fn::Sub: 'api.${DomainName}'
+      Priority: 1
+      ListenerArn: !Ref 'HttpsLoadBalancerListener'
+    DependsOn: ApiMsTargetGroupPublic
+  AsDashboardListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties :
+      Actions :
+        -
+          Type: forward
+          TargetGroupArn: !Ref 'AsDashboardTargetGroupPublic'
+      Conditions:
+        -
+          Field: host-header
+          Values:
+            -
+               Fn::Sub: 'admin.${DomainName}'
+      Priority: 2
+      ListenerArn: !Ref 'HttpsLoadBalancerListener'
+    DependsOn: AsDashboardTargetGroupPublic
+  MockyWebsiteListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties :
+      Actions :
+        -
+          Type: forward
+          TargetGroupArn: !Ref 'MockyWebsiteTargetGroupPublic'
+      Conditions:
+        -
+          Field: host-header
+          Values:
+            -
+               Fn::Sub: 'demo.${DomainName}'
+      Priority: 3
+      ListenerArn: !Ref 'HttpsLoadBalancerListener'
+    DependsOn: MockyWebsiteTargetGroupPublic
+  WebAppListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties :
+      Actions :
+        -
+          Type: forward
+          TargetGroupArn: !Ref 'WebAppTargetGroupPublic'
+      Conditions:
+        -
+          Field: host-header
+          Values:
+            -
+               Fn::Sub: 'web.${DomainName}'
+      Priority: 4
+      ListenerArn: !Ref 'HttpsLoadBalancerListener'
+    DependsOn: WebAppTargetGroupPublic
+
+ # Cerificate creation
+
+  DomainCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties: 
+      DomainName:
+        Fn::Sub: 'api.${DomainName}'
+      DomainValidationOptions:
+        - DomainName: !Sub '${DomainName}'
+          ValidationDomain: !Sub '${DomainName}'
+      SubjectAlternativeNames: 
+        - Fn::Sub: '${DomainName}'
+        - Fn::Sub: 'web.${DomainName}'
+        - Fn::Sub: 'admin.${DomainName}'
+        - Fn::Sub: 'demo.${DomainName}'
+      ValidationMethod: DNS
+
+
+  # This is an IAM role which authorizes ECS to manage resources on your
+  # account on your behalf, such as updating your load balancer with the
+  # details of where your containers are, so that traffic can reach your
+  # containers.
+  ECSRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ecs.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+      - PolicyName: ecs-service
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+              # Rules which allow ECS to attach network interfaces to instances
+              # on your behalf in order for awsvpc networking mode to work right
+              - 'ec2:AttachNetworkInterface'
+              - 'ec2:CreateNetworkInterface'
+              - 'ec2:CreateNetworkInterfacePermission'
+              - 'ec2:DeleteNetworkInterface'
+              - 'ec2:DeleteNetworkInterfacePermission'
+              - 'ec2:Describe*'
+              - 'ec2:DetachNetworkInterface'
+
+              # Rules which allow ECS to update load balancers on your behalf
+              # with the information sabout how to send traffic to your containers
+              - 'elasticloadbalancing:DeregisterInstancesFromLoadBalancer'
+              - 'elasticloadbalancing:DeregisterTargets'
+              - 'elasticloadbalancing:Describe*'
+              - 'elasticloadbalancing:RegisterInstancesWithLoadBalancer'
+              - 'elasticloadbalancing:RegisterTargets'
+            Resource: '*'
+
+  # Registries creation
+  ApiMsRegistry:
+    Type: AWS::ECR::Repository
+    Properties: 
+      RepositoryName: "capriza-ng/api-ms"
+
+  ApprovalsDbMigrationRegistry:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: "capriza-ng/approvals-db-migration"
+  
+  ApprovalsMsRegistry:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: "capriza-ng/approvals-ms"
+
+  AsDashboardRegistry:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: "capriza-ng/as-dashboard"
+
+  ConnectorQuickRegistry:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: "capriza-ng/connector-quick"
+
+  ConnectorSaasServiceNowRegistry:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: "capriza-ng/connector-saas-service-now"
+
+  CoreDbMigrationRegistry:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: "capriza-ng/core-db-migration"
+
+  CoreMsRegistry:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: "capriza-ng/core-ms"
+
+  EmailMsRegistry:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: "capriza-ng/email-ms"
+
+  FeedbackDbMigrationRegistry:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: "capriza-ng/feedback-db-migration"
+
+  FeedbackMsRegistry:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: "capriza-ng/feedback-ms"
+
+  GatewayMsRegistry:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: "capriza-ng/gateway-ms"
+
+  MockyWebsiteMsRegistry:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: "capriza-ng/mocky-website"
+
+  NotifMsRegistry:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: "capriza-ng/notif-ms"
+
+  RequestsDbMigrationRegistry:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: "capriza-ng/requests-db-migration"
+
+  RequestsMsRegistry:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: "capriza-ng/requests-ms"
+
+  StatsDbMigrationRegistry:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: "capriza-ng/stats-db-migration"
+
+  StatsMsRegistry:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: "capriza-ng/stats-ms"
+
+  WebAppRegistry:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: "capriza-ng/web-app"
+
+  # Task Definition creation
+  
+  ApiMsTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties : 
+      ContainerDefinitions : 
+        -
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/api-ms
+              awslogs-region: !Ref 'Region'
+              awslogs-stream-prefix: ecs
+          PortMappings:
+            -
+              ContainerPort: 3000
+              HostPort: 0
+              Protocol: tcp
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref 'Region'
+            - Name: MS_NAME
+              Value: api-ms
+            - Name: NODE_ENV
+              Value: !Ref 'Env'
+            - Name: USE_NEWRELIC
+              Value: 1
+          Cpu: 0
+          MemoryReservation: 128
+          Name: api-ms
+          Image: 
+            Fn::Sub: '${AWS::AccountId}.dkr.ecr.${Region}.amazonaws.com/capriza-ng/api-ms:latest'
+      ExecutionRoleArn : 
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole'
+      Family : api-ms
+      NetworkMode : bridge
+      RequiresCompatibilities :
+        - EC2
+      TaskRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_api-ms'
+    DependsOn:
+      - ApiMsRole
+      - ApiMsRegistry
+
+
+  ApprovalsDbMigrationTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties :
+      ContainerDefinitions :
+        -
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/approvals-db-migration
+              awslogs-region: !Ref 'Region'
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref 'Region'
+            - Name: MS_NAME
+              Value: approvals-ms
+            - Name: NODE_ENV
+              Value: !Ref 'Env'
+            - Name: USE_NEWRELIC
+              Value: 1
+          Cpu: 0
+          MemoryReservation: 128
+          Name: approvals-db-migration
+          Image:
+            Fn::Sub: '${AWS::AccountId}.dkr.ecr.${Region}.amazonaws.com/capriza-ng/approvals-db-migration:latest'
+      ExecutionRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole'
+      Family : approvals-db-migration
+      NetworkMode : bridge
+      RequiresCompatibilities :
+        - EC2
+      TaskRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_approvals-db-migration'
+    DependsOn:
+      - ApprovalsDbMigrationRole
+      - ApprovalsDbMigrationRegistry
+
+
+  ApprovalsMsTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties :
+      ContainerDefinitions :
+        -
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/approvals-ms
+              awslogs-region: !Ref 'Region'
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref 'Region'
+            - Name: MS_NAME
+              Value: approvals-ms
+            - Name: NODE_ENV
+              Value: !Ref 'Env'
+            - Name: USE_NEWRELIC
+              Value: 1
+          Cpu: 0
+          MemoryReservation: 128
+          Name: approvals-ms
+          Image:
+            Fn::Sub: '${AWS::AccountId}.dkr.ecr.${Region}.amazonaws.com/capriza-ng/approvals-ms:latest'
+      ExecutionRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole'
+      Family : approvals-ms
+      NetworkMode : bridge
+      RequiresCompatibilities : 
+        - EC2
+      TaskRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_approvals-ms'
+    DependsOn:
+      - ApprovalsMsRole
+      - ApprovalsDbMigrationRegistry
+
+
+  AsDashboardTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties :
+      ContainerDefinitions :
+        -
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/as-dashboard
+              awslogs-region: !Ref 'Region'
+              awslogs-stream-prefix: ecs
+          PortMappings:
+            -
+              ContainerPort: 3001
+              HostPort: 0
+              Protocol: tcp
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref 'Region'
+            - Name: MS_NAME
+              Value: as-dashboard
+            - Name: NODE_ENV
+              Value: !Ref 'Env'
+            - Name: USE_NEWRELIC
+              Value: 1
+          Cpu: 0
+          MemoryReservation: 128
+          Name: as-dashboard
+          Image:
+            Fn::Sub: '${AWS::AccountId}.dkr.ecr.${Region}.amazonaws.com/capriza-ng/as-dashboard:latest'
+      ExecutionRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole'
+      Family : as-dashboard
+      NetworkMode : bridge
+      RequiresCompatibilities : 
+        - EC2
+    DependsOn:
+      - AsDashboardRegistry
+
+
+  CoreMsTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties :
+      ContainerDefinitions :
+        -
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/core-ms
+              awslogs-region: !Ref 'Region'
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref 'Region'
+            - Name: MS_NAME
+              Value: core-ms
+            - Name: NODE_ENV
+              Value: !Ref 'Env'
+            - Name: USE_NEWRELIC
+              Value: 1
+          Cpu: 0
+          MemoryReservation: 128
+          Name: core-ms
+          Image:
+            Fn::Sub: '${AWS::AccountId}.dkr.ecr.${Region}.amazonaws.com/capriza-ng/core-ms:latest'
+      ExecutionRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole'
+      Family : core-ms
+      NetworkMode : bridge
+      RequiresCompatibilities : 
+        - EC2
+      TaskRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_core-ms'
+    DependsOn:
+      - CoreMsRole
+      - CoreDbMigrationRegistry
+
+
+  CoreDbMigrationTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties :
+      ContainerDefinitions :
+        -
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/core-db-migration
+              awslogs-region: !Ref 'Region'
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref 'Region'
+            - Name: MS_NAME
+              Value: core-ms
+            - Name: NODE_ENV
+              Value: !Ref 'Env'
+            - Name: USE_NEWRELIC
+              Value: 1
+          Cpu: 0
+          MemoryReservation: 128
+          Name: core-db-migration
+          Image:
+            Fn::Sub: '${AWS::AccountId}.dkr.ecr.${Region}.amazonaws.com/capriza-ng/core-db-migration:latest'
+      ExecutionRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole'
+      Family : core-db-migration
+      NetworkMode : bridge
+      RequiresCompatibilities : 
+        - EC2
+      TaskRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_core-db-migration'
+    DependsOn:
+      - CoreDbMigrationRole
+      - CoreDbMigrationRegistry
+
+
+  EmailMsTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties :
+      ContainerDefinitions :
+        -
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/email-ms
+              awslogs-region: !Ref 'Region'
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref 'Region'
+            - Name: MS_NAME
+              Value: email-ms
+            - Name: NODE_ENV
+              Value: !Ref 'Env'
+            - Name: USE_NEWRELIC
+              Value: 1
+          Cpu: 0
+          MemoryReservation: 128
+          Name: email-ms
+          Image:
+            Fn::Sub: '${AWS::AccountId}.dkr.ecr.${Region}.amazonaws.com/capriza-ng/email-ms:latest'
+      ExecutionRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole'
+      Family : email-ms
+      NetworkMode : bridge
+      RequiresCompatibilities : 
+        - EC2
+      TaskRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_email-ms'
+    DependsOn:
+      - EmailMsRole
+      - EmailMsRegistry
+
+
+  FeedbackMsTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties :
+      ContainerDefinitions :
+        -
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/feedback-ms
+              awslogs-region: !Ref 'Region'
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref 'Region'
+            - Name: MS_NAME
+              Value: feedback-ms
+            - Name: NODE_ENV
+              Value: !Ref 'Env'
+            - Name: USE_NEWRELIC
+              Value: 1
+          Cpu: 0
+          MemoryReservation: 128
+          Name: feedback-ms
+          Image:
+            Fn::Sub: '${AWS::AccountId}.dkr.ecr.${Region}.amazonaws.com/capriza-ng/feedback-ms:latest'
+      ExecutionRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole'
+      Family : feedback-ms
+      NetworkMode : bridge
+      RequiresCompatibilities : 
+        - EC2
+      TaskRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_feedback-ms'
+    DependsOn:
+      - FeedbackMsRole
+      - FeedbackMsRegistry
+
+
+  FeedbackDbMigrationTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties :
+      ContainerDefinitions :
+        -
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/feedback-db-migration
+              awslogs-region: !Ref 'Region'
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref 'Region'
+            - Name: MS_NAME
+              Value: feedback-ms
+            - Name: NODE_ENV
+              Value: !Ref 'Env'
+            - Name: USE_NEWRELIC
+              Value: 1
+          Cpu: 0
+          MemoryReservation: 128
+          Name: feedback-db-migration
+          Image:
+            Fn::Sub: '${AWS::AccountId}.dkr.ecr.${Region}.amazonaws.com/capriza-ng/feedback-db-migration:latest'
+      ExecutionRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole'
+      Family : feedback-db-migration
+      NetworkMode : bridge
+      RequiresCompatibilities : 
+        - EC2
+      TaskRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_feedback-db-migration'
+    DependsOn:
+      - FeedbackDbMigrationRole
+      - FeedbackDbMigrationRegistry
+
+
+  GatewayMsTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties :
+      ContainerDefinitions :
+        -
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/gateway-ms
+              awslogs-region: !Ref 'Region'
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref 'Region'
+            - Name: MS_NAME
+              Value: gateway-ms
+            - Name: NODE_ENV
+              Value: !Ref 'Env'
+            - Name: USE_NEWRELIC
+              Value: 1
+          Cpu: 0
+          MemoryReservation: 128
+          Name: gateway-ms
+          Image:
+            Fn::Sub: '${AWS::AccountId}.dkr.ecr.${Region}.amazonaws.com/capriza-ng/gateway-ms:latest'
+      ExecutionRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole'
+      Family : gateway-ms
+      NetworkMode : bridge
+      RequiresCompatibilities : 
+        - EC2
+      TaskRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_gateway-ms'
+    DependsOn:
+      - GatewayMsRole
+      - GatewayMsRegistry
+
+
+  MockyWebsiteTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties :
+      ContainerDefinitions :
+        -
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/mocky-website
+              awslogs-region: !Ref 'Region'
+              awslogs-stream-prefix: ecs
+          PortMappings:
+            -
+              ContainerPort: 3000
+              HostPort: 0
+              Protocol: tcp
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref 'Region'
+            - Name: MS_NAME
+              Value: mocky-website-ms
+            - Name: NODE_ENV
+              Value: !Ref 'Env'
+            - Name: USE_NEWRELIC
+              Value: 1
+          Cpu: 0
+          MemoryReservation: 128
+          Name: mocky-website
+          Image:
+            Fn::Sub: '${AWS::AccountId}.dkr.ecr.${Region}.amazonaws.com/capriza-ng/mocky-website:latest'
+      ExecutionRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole'
+      Family : mocky-website
+      NetworkMode : bridge
+      RequiresCompatibilities : 
+        - EC2
+      TaskRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_mocky-ms'
+    DependsOn:
+      - MockyWebsiteRole
+      - MockyWebsiteMsRegistry
+
+
+  NotifMsTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties :
+      ContainerDefinitions :
+        -
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/notif-ms
+              awslogs-region: !Ref 'Region'
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref 'Region'
+            - Name: MS_NAME
+              Value: notif-ms
+            - Name: NODE_ENV
+              Value: !Ref 'Env'
+            - Name: USE_NEWRELIC
+              Value: 1
+          Cpu: 0
+          MemoryReservation: 128
+          Name: notif-ms
+          Image:
+            Fn::Sub: '${AWS::AccountId}.dkr.ecr.${Region}.amazonaws.com/capriza-ng/notif-ms:latest'
+      ExecutionRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole'
+      Family : notif-ms
+      NetworkMode : bridge
+      RequiresCompatibilities : 
+        - EC2
+      TaskRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_notif-ms'
+    DependsOn:
+      - NotifMsRole
+      - NotifMsRegistry
+
+
+  RequestsMsTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties :
+      ContainerDefinitions :
+        -
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/requests-ms
+              awslogs-region: !Ref 'Region'
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref 'Region'
+            - Name: MS_NAME
+              Value: requests-ms
+            - Name: NODE_ENV
+              Value: !Ref 'Env'
+            - Name: USE_NEWRELIC
+              Value: 1
+          Cpu: 0
+          MemoryReservation: 128
+          Name: requests-ms
+          Image:
+            Fn::Sub: '${AWS::AccountId}.dkr.ecr.${Region}.amazonaws.com/capriza-ng/requests-ms:latest'
+      ExecutionRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole'
+      Family : requests-ms
+      NetworkMode : bridge
+      RequiresCompatibilities : 
+        - EC2
+      TaskRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_requests-ms'
+    DependsOn:
+      - RequestsMsRole
+      - RequestsMsRegistry
+
+
+  RequestsDbMigrationTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties :
+      ContainerDefinitions :
+        -
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/requests-db-migration
+              awslogs-region: !Ref 'Region'
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref 'Region'
+            - Name: MS_NAME
+              Value: requests-ms
+            - Name: NODE_ENV
+              Value: !Ref 'Env'
+            - Name: USE_NEWRELIC
+              Value: 1
+          Cpu: 0
+          MemoryReservation: 128
+          Name: requests-db-migration
+          Image:
+            Fn::Sub: '${AWS::AccountId}.dkr.ecr.${Region}.amazonaws.com/capriza-ng/requests-db-migration:latest'
+      ExecutionRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole'
+      Family : requests-db-migration
+      NetworkMode : bridge
+      RequiresCompatibilities : 
+        - EC2
+      TaskRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_requests-db-migration'
+    DependsOn:
+      - RequestsDbMigrationRole
+      - RequestsDbMigrationRegistry
+
+
+  StatsMsTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties :
+      ContainerDefinitions :
+        -
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/stats-ms
+              awslogs-region: !Ref 'Region'
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref 'Region'
+            - Name: MS_NAME
+              Value: stats-ms
+            - Name: NODE_ENV
+              Value: !Ref 'Env'
+            - Name: USE_NEWRELIC
+              Value: 1
+          Cpu: 0
+          MemoryReservation: 128
+          Name: stats-ms
+          Image:
+            Fn::Sub: '${AWS::AccountId}.dkr.ecr.${Region}.amazonaws.com/capriza-ng/stats-ms:latest'
+      ExecutionRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole'
+      Family : stats-ms
+      NetworkMode : bridge
+      RequiresCompatibilities : 
+        - EC2
+      TaskRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_stats-ms'
+    DependsOn:
+      - StatsMsRole
+      - StatsMsRegistry
+
+
+  StatsDbMigrationTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties :
+      ContainerDefinitions :
+        -
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/stats-db-migration
+              awslogs-region: !Ref 'Region'
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref 'Region'
+            - Name: MS_NAME
+              Value: stats-ms
+            - Name: NODE_ENV
+              Value: !Ref 'Env'
+            - Name: USE_NEWRELIC
+              Value: 1
+          Cpu: 0
+          MemoryReservation: 128
+          Name: stats-db-migration
+          Image:
+            Fn::Sub: '${AWS::AccountId}.dkr.ecr.${Region}.amazonaws.com/capriza-ng/stats-db-migration:latest'
+      ExecutionRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole'
+      Family : stats-db-migration
+      NetworkMode : bridge
+      RequiresCompatibilities : 
+        - EC2
+      TaskRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_stats-db-migration'
+    DependsOn:
+      - StatsDbMigrationRole
+      - StatsDbMigrationRegistry
+
+
+  WebAppTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties :
+      ContainerDefinitions :
+        - 
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/web-app
+              awslogs-region: !Ref 'Region'
+              awslogs-stream-prefix: ecs
+          PortMappings:
+            -
+              ContainerPort: 3002
+              HostPort: 0
+              Protocol: tcp
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref 'Region'
+            - Name: MS_NAME
+              Value: web-app
+            - Name: NODE_ENV
+              Value: !Ref 'Env'
+            - Name: USE_NEWRELIC
+              Value: 1
+          Cpu: 0
+          MemoryReservation: 128
+          Name: web-app
+          Image:
+            Fn::Sub: '${AWS::AccountId}.dkr.ecr.${Region}.amazonaws.com/capriza-ng/web-app:latest'
+      ExecutionRoleArn :
+        Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole'
+      Family : web-app
+      NetworkMode : bridge
+      RequiresCompatibilities : 
+        - EC2
+    DependsOn:
+      - WebAppRegistry
+
+
+# KMS Key Creation
+  ApiMsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description : Api-Ms Key
+      Enabled : true
+      KeyPolicy :
+        Version: "2012-10-17"
+        Statement:
+          -
+            Sid: "Enable IAM User Permissions"
+            Effect: Allow
+            Principal:
+              AWS: 
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:root'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow administration of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/OrganizationAccountAccessRole'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow use of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_api-ms'
+            Action:
+              - "kms:*"
+            Resource: "*"
+      KeyUsage : ENCRYPT_DECRYPT
+      Tags : 
+        -
+           Key: "Name"
+           Value:
+             Fn::Sub: '/${Env}/api-ms'
+    DependsOn:
+      - ApiMsRole
+
+
+  ApiMsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ecs-tasks.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      RoleName:
+        Fn::Sub: '${Env}_api-ms'
+
+
+  ApiMsPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName:
+        Fn::Sub: '${Env}_api-ms'
+      PolicyDocument:
+        Statement:
+        - 
+          Effect: Allow
+          Action:
+            - 'kms:Decrypt'
+            - 'secretsmanager:GetSecretValue'
+          Resource:
+            Fn::Sub: 'arn:aws:kms:${Region}:${AWS::AccountId}:key/*'
+            Fn::Sub: 'arn:aws:secretsmanager:${Region}:${AWS::AccountId}:secret:/${Env}/api-ms*'
+        - 
+          Effect: Allow
+          Action:
+            - 'logs:CreateLogGroup'
+          Resource:
+            - '*'
+      Roles:
+        -
+          Fn::Sub: '${Env}_api-ms'
+    DependsOn:
+      - ApiMsRole
+      - ApiMsSecretsManager
+
+
+  ApprovalsMsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description : Approvals-Ms Key
+      Enabled : true
+      KeyPolicy :
+        Version: "2012-10-17"
+        Statement:
+          -
+            Sid: "Enable IAM User Permissions"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:root'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow administration of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/OrganizationAccountAccessRole'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow use of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_approvals-ms'
+            Action:
+              - "kms:*"
+            Resource: "*"
+      KeyUsage : ENCRYPT_DECRYPT
+      Tags :
+        -
+           Key: "Name"
+           Value:
+             Fn::Sub: '/${Env}/approvals-ms'
+    DependsOn:
+      - ApprovalsMsRole
+
+
+
+  ApprovalsMsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ecs-tasks.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      RoleName:
+        Fn::Sub: '${Env}_approvals-ms'
+
+
+  ApprovalsMsPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName:
+        Fn::Sub: '${Env}_approvals-ms'
+      PolicyDocument:
+        Statement:
+        - 
+          Effect: Allow
+          Action:
+            - 'kms:Decrypt'
+            - 'secretsmanager:GetSecretValue'
+          Resource:
+            Fn::Sub: 'arn:aws:kms:${Region}:${AWS::AccountId}:key/*'
+            Fn::Sub: 'arn:aws:secretsmanager:${Region}:${AWS::AccountId}:secret:/${Env}/approvals-ms*'
+        -
+          Effect: Allow
+          Action:
+            - 'logs:CreateLogGroup'
+          Resource:
+            - '*'
+      Roles: 
+        -
+          Fn::Sub: '${Env}_approvals-ms'
+        -
+          Fn::Sub: '${Env}_approvals-db-migration'
+    DependsOn:
+      - ApprovalsMsRole
+      - ApprovalsDbMigrationRole
+      - ApprovalsMsSecretsManager
+
+
+
+
+  ApprovalsDbMigrationKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description : Approvals-Db-Migration Key
+      Enabled : true
+      KeyPolicy :
+        Version: "2012-10-17"
+        Statement:
+          -
+            Sid: "Enable IAM User Permissions"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:root'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow administration of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/OrganizationAccountAccessRole'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow use of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_approvals-db-migration'
+            Action:
+              - "kms:*"
+            Resource: "*"
+      KeyUsage : ENCRYPT_DECRYPT
+      Tags :
+        -
+           Key: "Name"
+           Value:
+             Fn::Sub: '/${Env}/approvals-db-migration'
+    DependsOn:
+      - ApprovalsDbMigrationRole
+
+  
+  ApprovalsDbMigrationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ecs-tasks.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      RoleName:
+        Fn::Sub: '${Env}_approvals-db-migration'
+
+
+  CoreMsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description : Core-Ms Key
+      Enabled : true
+      KeyPolicy :
+        Version: "2012-10-17"
+        Statement:
+          -
+            Sid: "Enable IAM User Permissions"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:root'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow administration of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/OrganizationAccountAccessRole'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow use of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_core-ms'
+            Action:
+              - "kms:*"
+            Resource: "*"
+      KeyUsage : ENCRYPT_DECRYPT
+      Tags :
+        -
+           Key: "Name"
+           Value:
+             Fn::Sub: '/${Env}/core-ms'
+    DependsOn:
+      - CoreMsRole
+
+
+  CoreMsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ecs-tasks.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      RoleName:
+        Fn::Sub: '${Env}_core-ms'
+
+
+  CoreMsPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName:
+        Fn::Sub: '${Env}_core-ms'
+      PolicyDocument:
+        Statement:
+        - 
+          Effect: Allow
+          Action:
+            - 'kms:Decrypt'
+            - 'iam:PassRole'
+            - 'logs:PutRetentionPolicy'
+            - 'secretsmanager:GetSecretValue'
+          Resource:
+            Fn::Sub: 'arn:aws:kms:${Region}:${AWS::AccountId}:key/*'
+            Fn::Sub: 'arn:aws:secretsmanager:${Region}:${AWS::AccountId}:secret:/${Env}/core-ms*'
+        -
+          Effect: Allow
+          Action:
+            - 'logs:PutRetentionPolicy'
+            - 'secretsmanager:CreateSecret'
+            - 'ecs:DeleteService'
+            - 'ec2:DescribeSecurityGroups'
+            - 'ecs:UpdateService'
+            - 'sts:AssumeRole'
+            - 'ecs:CreateService'
+            - 'sts:DecodeAuthorizationMessage'
+            - 'sts:AssumeRoleWithSAML'
+            - 'ecs:RegisterTaskDefinition'
+            - 'lambda:*'
+            - 'ecs:DescribeServices'
+            - 'logs:PutSubscriptionFilter'
+            - 'ec2:DescribeSubnets'
+            - 'sts:AssumeRoleWithWebIdentity'
+          Resource:
+            - '*'
+        -
+          Effect: Allow
+          Action:
+            - 'ecr:SetRepositoryPolicy'
+            - 'ecr:GetRepositoryPolicy'
+          Resource:
+            - '*'
+      Roles:
+        -
+          Fn::Sub: '${Env}_core-ms'
+        -
+          Fn::Sub: '${Env}_core-db-migration'
+    DependsOn:
+      - CoreMsRole
+      - CoreDbMigrationRole
+      - CoreMsSecretsManager
+
+
+  CoreDbMigrationKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description : Core-Db-Migration Key
+      Enabled : true
+      KeyPolicy :
+        Version: "2012-10-17"
+        Statement:
+          -
+            Sid: "Enable IAM User Permissions"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:root'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow administration of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/OrganizationAccountAccessRole'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow use of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_core-db-migration'
+            Action:
+              - "kms:*"
+            Resource: "*"
+      KeyUsage : ENCRYPT_DECRYPT
+      Tags :
+        -
+           Key: "Name"
+           Value:
+             Fn::Sub: '/${Env}/core-db-migration'
+    DependsOn:
+      - CoreDbMigrationRole
+
+
+  CoreDbMigrationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ecs-tasks.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      RoleName:
+        Fn::Sub: '${Env}_core-db-migration'
+
+
+  EmailMsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description : Email-Ms Key
+      Enabled : true
+      KeyPolicy :
+        Version: "2012-10-17"
+        Statement:
+          -
+            Sid: "Enable IAM User Permissions"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:root'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow administration of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/OrganizationAccountAccessRole'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow use of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_email-ms'
+            Action:
+              - "kms:*"
+            Resource: "*"
+      KeyUsage : ENCRYPT_DECRYPT
+      Tags :
+        -
+           Key: "Name"
+           Value:
+             Fn::Sub: '/${Env}/email-ms'
+    DependsOn:
+      - EmailMsRole
+
+
+  EmailMsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ecs-tasks.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      RoleName:
+        Fn::Sub: '${Env}_email-ms'
+
+
+  EmailMsPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName:
+        Fn::Sub: '${Env}_email-ms'
+      PolicyDocument:
+        Statement:
+        - 
+          Effect: Allow
+          Action:
+            - 'kms:Decrypt'
+            - 'secretsmanager:GetSecretValue'
+          Resource:
+            Fn::Sub: 'arn:aws:kms:${Region}:${AWS::AccountId}:key/*'
+            Fn::Sub: 'arn:aws:secretsmanager:${Region}:${AWS::AccountId}:secret:/${Env}/email-ms*'
+        -
+          Effect: Allow
+          Action:
+            - 'logs:CreateLogGroup'
+          Resource:
+            - '*'
+      Roles:
+        -
+          Fn::Sub: '${Env}_email-ms'
+    DependsOn:
+      - EmailMsRole
+      - EmailMsSecretsManager
+
+  FeedbackMsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description : Feedback-Ms Key
+      Enabled : true
+      KeyPolicy :
+        Version: "2012-10-17"
+        Statement:
+          -
+            Sid: "Enable IAM User Permissions"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:root'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow administration of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/OrganizationAccountAccessRole'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow use of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_feedback-ms'
+            Action:
+              - "kms:*"
+            Resource: "*"
+      KeyUsage : ENCRYPT_DECRYPT
+      Tags :
+        -
+           Key: "Name"
+           Value:
+             Fn::Sub: '/${Env}/feedback-ms'
+    DependsOn:
+      - FeedbackMsRole
+
+
+
+  FeedbackMsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ecs-tasks.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      RoleName:
+        Fn::Sub: '${Env}_feedback-ms'
+
+
+  FeedbackMsPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName:
+        Fn::Sub: '${Env}_feedback-ms'
+      PolicyDocument:
+        Statement:
+        - 
+          Effect: Allow
+          Action:
+            - 'kms:Decrypt'
+            - 'secretsmanager:GetSecretValue'
+          Resource:
+            Fn::Sub: 'arn:aws:kms:${Region}:${AWS::AccountId}:key/*'
+            Fn::Sub: 'arn:aws:secretsmanager:${Region}:${AWS::AccountId}:secret:/${Env}/feedback-ms*'
+        -
+          Effect: Allow
+          Action:
+            - 'logs:CreateLogGroup'
+          Resource:
+            - '*'
+      Roles:
+        -
+          Fn::Sub: '${Env}_feedback-ms'
+        -
+          Fn::Sub: '${Env}_feedback-db-migration'
+    DependsOn:
+      - FeedbackMsRole
+      - FeedbackDbMigrationRole
+      - FeedbackMsSecretsManager
+
+  
+  FeedbackDbMigrationKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description : Feedback-Db-Migration Key
+      Enabled : true
+      KeyPolicy :
+        Version: "2012-10-17"
+        Statement:
+          -
+            Sid: "Enable IAM User Permissions"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:root'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow administration of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/OrganizationAccountAccessRole'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow use of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_feedback-db-migration'
+            Action:
+              - "kms:*"
+            Resource: "*"
+      KeyUsage : ENCRYPT_DECRYPT
+      Tags :
+        -
+           Key: "Name"
+           Value:
+             Fn::Sub: '/${Env}/feedback-db-migration'
+    DependsOn:
+      - FeedbackDbMigrationRole
+
+
+  FeedbackDbMigrationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ecs-tasks.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      RoleName:
+        Fn::Sub: '${Env}_feedback-db-migration'
+
+
+  GatewayMsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description : Gateway-Ms Key
+      Enabled : true
+      KeyPolicy :
+        Version: "2012-10-17"
+        Statement:
+          -
+            Sid: "Enable IAM User Permissions"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:root'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow administration of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/OrganizationAccountAccessRole'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow use of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_gateway-ms'
+            Action:
+              - "kms:*"
+            Resource: "*"
+      KeyUsage : ENCRYPT_DECRYPT
+      Tags :
+        -
+           Key: "Name"
+           Value:
+             Fn::Sub: '/${Env}/gateway-ms'
+    DependsOn:
+      - GatewayMsRole
+
+
+  GatewayMsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ecs-tasks.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      RoleName:
+        Fn::Sub: '${Env}_gateway-ms'
+
+
+  GatewayMsPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName:
+        Fn::Sub: '${Env}_gateway-ms'
+      PolicyDocument:
+        Statement:
+        - 
+          Effect: Allow
+          Action:
+            - 'kms:Decrypt'
+            - 'secretsmanager:GetSecretValue'
+          Resource:
+            Fn::Sub: 'arn:aws:kms:${Region}:${AWS::AccountId}:key/*'
+            Fn::Sub: 'arn:aws:secretsmanager:${Region}:${AWS::AccountId}:secret:/${Env}/gateway-ms*'
+        -
+          Effect: Allow
+          Action:
+            - 'logs:CreateLogGroup'
+          Resource:
+            - '*'
+      Roles:
+        -
+          Fn::Sub: '${Env}_gateway-ms'
+    DependsOn:
+      - GatewayMsRole
+      - GatewayMsSecretsManager
+
+
+  MockyWebsiteKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description : Mocky-Website Key
+      Enabled : true
+      KeyPolicy :
+        Version: "2012-10-17"
+        Statement:
+          -
+            Sid: "Enable IAM User Permissions"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:root'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow administration of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/OrganizationAccountAccessRole'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow use of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_mocky-website-ms'
+            Action:
+              - "kms:*"
+            Resource: "*"
+      KeyUsage : ENCRYPT_DECRYPT
+      Tags :
+        -
+           Key: "Name"
+           Value:
+             Fn::Sub: '/${Env}/mocky-website-ms'
+    DependsOn:
+      - MockyWebsiteRole
+
+
+
+  MockyWebsiteRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ecs-tasks.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      RoleName:
+        Fn::Sub: '${Env}_mocky-website-ms'
+
+
+  MockyWebsitePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName:
+        Fn::Sub: '${Env}_mocky-website-ms'
+      PolicyDocument:
+        Statement:
+        - 
+          Effect: Allow
+          Action:
+            - 'kms:Decrypt'
+            - 'secretsmanager:GetSecretValue'
+          Resource:
+            Fn::Sub: 'arn:aws:kms:${Region}:${AWS::AccountId}:key/*'
+            Fn::Sub: 'arn:aws:secretsmanager:${Region}:${AWS::AccountId}:secret:/${Env}/mocky-website-ms*'
+        -
+          Effect: Allow
+          Action:
+            - 'logs:CreateLogGroup'
+          Resource:
+            - '*'
+      Roles:
+        -
+          Fn::Sub: '${Env}_mocky-website-ms'
+    DependsOn:
+      - MockyWebsiteRole
+      - MockyWebsiteSecretsManager
+
+
+  NotifMsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description : Notif-Ms Key
+      Enabled : true
+      KeyPolicy :
+        Version: "2012-10-17"
+        Statement:
+          -
+            Sid: "Enable IAM User Permissions"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:root'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow administration of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/OrganizationAccountAccessRole'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow use of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_notif-ms'
+            Action:
+              - "kms:*"
+            Resource: "*"
+      KeyUsage : ENCRYPT_DECRYPT
+      Tags :
+        -
+           Key: "Name"
+           Value:
+             Fn::Sub: '/${Env}/notif-ms'
+    DependsOn:
+      - NotifMsRole
+
+
+  NotifMsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ecs-tasks.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      RoleName:
+        Fn::Sub: '${Env}_notif-ms'
+
+
+  NotifMsPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName:
+        Fn::Sub: '${Env}_notif-ms'
+      PolicyDocument:
+        Statement:
+        - 
+          Effect: Allow
+          Action:
+            - 'kms:Decrypt'
+            - 'secretsmanager:GetSecretValue'
+          Resource:
+            Fn::Sub: 'arn:aws:kms:${Region}:${AWS::AccountId}:key/*'
+            Fn::Sub: 'arn:aws:secretsmanager:${Region}:${AWS::AccountId}:secret:/${Env}/notif-ms*'
+        -
+          Effect: Allow
+          Action:
+            - 'logs:CreateLogGroup'
+          Resource:
+            - '*'
+      Roles:
+        -
+          Fn::Sub: '${Env}_notif-ms'
+    DependsOn:
+      - NotifMsRole
+      - NotifMsSecretsManager
+
+
+  RequestsMsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description : Requests-Ms Key
+      Enabled : true
+      KeyPolicy :
+        Version: "2012-10-17"
+        Statement:
+          -
+            Sid: "Enable IAM User Permissions"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:root'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow administration of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/OrganizationAccountAccessRole'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow use of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_requests-ms'
+            Action:
+              - "kms:*"
+            Resource: "*"
+      KeyUsage : ENCRYPT_DECRYPT
+      Tags :
+        -
+           Key: "Name"
+           Value:
+             Fn::Sub: '/${Env}/requests-ms'
+    DependsOn:
+      - RequestsMsRole
+
+
+  RequestsMsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ecs-tasks.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      RoleName:
+        Fn::Sub: '${Env}_requests-ms'
+
+
+  RequestsMsPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName:
+        Fn::Sub: '${Env}_requests-ms'
+      PolicyDocument:
+        Statement:
+        - 
+          Effect: Allow
+          Action:
+            - 'kms:Decrypt'
+            - 'secretsmanager:GetSecretValue'
+          Resource:
+            Fn::Sub: 'arn:aws:kms:${Region}:${AWS::AccountId}:key/*'
+            Fn::Sub: 'arn:aws:secretsmanager:${Region}:${AWS::AccountId}:secret:/${Env}/requests-ms*'
+        -
+          Effect: Allow
+          Action:
+            - 'logs:CreateLogGroup'
+          Resource:
+            - '*'
+      Roles:
+        -
+          Fn::Sub: '${Env}_requests-ms'
+        -
+          Fn::Sub: '${Env}_requests-db-migration'
+    DependsOn:
+      - RequestsMsRole
+      - RequestsDbMigrationRole
+      - RequestsMsSecretsManager
+
+  RequestsDbMigrationKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description : Requests-Db-Migration Key
+      Enabled : true
+      KeyPolicy :
+        Version: "2012-10-17"
+        Statement:
+          -
+            Sid: "Enable IAM User Permissions"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:root'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow administration of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/OrganizationAccountAccessRole'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow use of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_requests-db-migration'
+            Action:
+              - "kms:*"
+            Resource: "*"
+      KeyUsage : ENCRYPT_DECRYPT
+      Tags :
+        -
+           Key: "Name"
+           Value:
+             Fn::Sub: '/${Env}/requests-db-migration'
+    DependsOn:
+      - RequestsDbMigrationRole
+
+
+  RequestsDbMigrationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ecs-tasks.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      RoleName:
+        Fn::Sub: '${Env}_requests-db-migration'
+
+
+  StatsMsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description : Stats-Ms Key
+      Enabled : true
+      KeyPolicy :
+        Version: "2012-10-17"
+        Statement:
+          -
+            Sid: "Enable IAM User Permissions"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:root'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow administration of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/OrganizationAccountAccessRole'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow use of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_stats-ms'
+            Action:
+              - "kms:*"
+            Resource: "*"
+      KeyUsage : ENCRYPT_DECRYPT
+      Tags :
+        -
+           Key: "Name"
+           Value:
+             Fn::Sub: '/${Env}/stats-ms'
+    DependsOn:
+      - StatsMsRole
+
+
+  StatsMsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ecs-tasks.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      RoleName:
+        Fn::Sub: '${Env}_stats-ms'
+
+
+  StatsMsPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName:
+        Fn::Sub: '${Env}_stats-ms'
+      PolicyDocument:
+        Statement:
+        - 
+          Effect: Allow
+          Action:
+            - 'kms:Decrypt'
+            - 'secretsmanager:GetSecretValue'
+          Resource:
+            Fn::Sub: 'arn:aws:kms:${Region}:${AWS::AccountId}:key/*'
+            Fn::Sub: 'arn:aws:secretsmanager:${Region}:${AWS::AccountId}:secret:/${Env}/stats-ms*'
+        -
+          Effect: Allow
+          Action:
+            - 'logs:CreateLogGroup'
+          Resource:
+            - '*'
+      Roles:
+        -
+          Fn::Sub: '${Env}_stats-ms'
+        -
+          Fn::Sub: '${Env}_stats-db-migration'
+    DependsOn:
+      - StatsMsRole
+      - StatsDbMigrationRole
+      - StatsMsSecretsManager
+
+
+
+  StatsDbMigrationKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description : Stats-Db-Migration Key
+      Enabled : true
+      KeyPolicy :
+        Version: "2012-10-17"
+        Statement:
+          -
+            Sid: "Enable IAM User Permissions"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:root'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow administration of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/OrganizationAccountAccessRole'
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: "Allow use of the key"
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:aws:iam::${AWS::AccountId}:role/${Env}_stats-db-migration'
+            Action:
+              - "kms:*"
+            Resource: "*"
+      KeyUsage : ENCRYPT_DECRYPT
+      Tags :
+        -
+           Key: "Name"
+           Value:
+             Fn::Sub: '/${Env}/stats-db-migration'
+    DependsOn:
+      - StatsDbMigrationRole
+
+
+
+  StatsDbMigrationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ecs-tasks.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      RoleName:
+        Fn::Sub: '${Env}_stats-db-migration'
+
+
+ # ECS Services
+  ApiMsService:
+    Type: AWS::ECS::Service
+    Properties: 
+      Cluster: !Ref ClusterName
+      DeploymentConfiguration: 
+        MaximumPercent: 200
+        MinimumHealthyPercent: 0
+      DesiredCount: 0
+      LaunchType: EC2
+      LoadBalancers: 
+        -
+           ContainerName: api-ms
+           ContainerPort: 3000
+           TargetGroupArn: !Ref 'ApiMsTargetGroupPublic'
+      PlacementConstraints: 
+        -
+          Type: distinctInstance
+      PlacementStrategies: 
+        -
+          Type: spread
+          Field: host
+      SchedulingStrategy: REPLICA
+      ServiceName: api-ms
+      TaskDefinition: !Ref ApiMsTaskDefinition
+    DependsOn:
+      - HttpLoadBalancerListener
+      - HttpsLoadBalancerListener
+      - ApiMsListenerRule
+      - ApiMsTargetGroupPublic
+      - ApiMsTaskDefinition
+
+
+  AsDashboardService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ClusterName
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 0
+      DesiredCount: 0
+      LaunchType: EC2
+      LoadBalancers:
+        -
+           ContainerName: as-dashboard
+           ContainerPort: 3001
+           TargetGroupArn: !Ref 'AsDashboardTargetGroupPublic'
+      PlacementConstraints:
+        -
+          Type: distinctInstance
+      PlacementStrategies:
+        -
+          Type: spread
+          Field: host
+      SchedulingStrategy: REPLICA
+      ServiceName: as-dashboard
+      TaskDefinition: !Ref AsDashboardTaskDefinition
+    DependsOn:
+      - HttpsLoadBalancerListener
+      - AsDashboardListenerRule
+      - AsDashboardTargetGroupPublic
+      - AsDashboardTaskDefinition
+
+
+  ApprovalsMsService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ClusterName
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 0
+      DesiredCount: 0
+      LaunchType: EC2
+      PlacementConstraints:
+        -
+          Type: distinctInstance
+      PlacementStrategies:
+        -
+          Type: spread
+          Field: host
+      SchedulingStrategy: REPLICA
+      ServiceName: approvals-ms
+      TaskDefinition: !Ref ApprovalsMsTaskDefinition
+    DependsOn:
+      - ApprovalsMsTaskDefinition
+
+
+  CoreMsService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ClusterName
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 0
+      DesiredCount: 0
+      LaunchType: EC2
+      PlacementConstraints:
+        -
+          Type: distinctInstance
+      PlacementStrategies:
+        -
+          Type: spread
+          Field: host
+      SchedulingStrategy: REPLICA
+      ServiceName: core-ms
+      TaskDefinition: !Ref CoreMsTaskDefinition
+    DependsOn:
+      - CoreMsTaskDefinition
+
+
+  
+  EmailMsService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ClusterName
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 0
+      DesiredCount: 0
+      LaunchType: EC2
+      PlacementConstraints:
+        -
+          Type: distinctInstance
+      PlacementStrategies:
+        -
+          Type: spread
+          Field: host
+      SchedulingStrategy: REPLICA
+      ServiceName: email-ms
+      TaskDefinition: !Ref EmailMsTaskDefinition
+    DependsOn:
+        - EmailMsTaskDefinition
+
+
+  FeedbackMsService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ClusterName
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 0
+      DesiredCount: 0
+      LaunchType: EC2
+      PlacementConstraints:
+        -
+          Type: distinctInstance
+      PlacementStrategies:
+        -
+          Type: spread
+          Field: host
+      SchedulingStrategy: REPLICA
+      ServiceName: feedback-ms
+      TaskDefinition: !Ref FeedbackMsTaskDefinition
+    DependsOn:
+        - FeedbackMsTaskDefinition
+
+
+  GatewayMsService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ClusterName
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 0
+      DesiredCount: 0
+      LaunchType: EC2
+      PlacementConstraints:
+        -
+          Type: distinctInstance
+      PlacementStrategies:
+        -
+          Type: spread
+          Field: host
+      SchedulingStrategy: REPLICA
+      ServiceName: gateway-ms
+      TaskDefinition: !Ref GatewayMsTaskDefinition
+    DependsOn:
+        - GatewayMsTaskDefinition
+
+
+  MockyWebsiteService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ClusterName
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 0
+      DesiredCount: 0
+      LaunchType: EC2
+      LoadBalancers:
+        -
+           ContainerName: mocky-website
+           ContainerPort: 3000
+           TargetGroupArn: !Ref 'MockyWebsiteTargetGroupPublic'
+      PlacementConstraints:
+        -
+          Type: distinctInstance
+      PlacementStrategies:
+        -
+          Type: spread
+          Field: host
+      SchedulingStrategy: REPLICA
+      ServiceName: mocky-website
+      TaskDefinition: !Ref MockyWebsiteTaskDefinition
+    DependsOn:
+        - HttpsLoadBalancerListener
+        - MockyWebsiteListenerRule
+        - MockyWebsiteTargetGroupPublic
+        - MockyWebsiteTaskDefinition
+
+
+  NotifMsService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ClusterName
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 0
+      DesiredCount: 0
+      LaunchType: EC2
+      PlacementConstraints:
+        -
+          Type: distinctInstance
+      PlacementStrategies:
+        -
+          Type: spread
+          Field: host
+      SchedulingStrategy: REPLICA
+      ServiceName: notif-ms
+      TaskDefinition: !Ref NotifMsTaskDefinition
+    DependsOn:
+        - NotifMsTaskDefinition
+
+
+  RequestsMsService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ClusterName
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 0
+      DesiredCount: 0
+      LaunchType: EC2
+      PlacementConstraints:
+        -
+          Type: distinctInstance
+      PlacementStrategies:
+        -
+          Type: spread
+          Field: host
+      SchedulingStrategy: REPLICA
+      ServiceName: requests-ms
+      TaskDefinition: !Ref RequestsMsTaskDefinition
+    DependsOn:
+        - RequestsMsTaskDefinition
+
+
+  StatsMsService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ClusterName
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 0
+      DesiredCount: 0
+      LaunchType: EC2
+      PlacementConstraints:
+        -
+          Type: distinctInstance
+      PlacementStrategies:
+        -
+          Type: spread
+          Field: host
+      SchedulingStrategy: REPLICA
+      ServiceName: stats-ms
+      TaskDefinition: !Ref StatsMsTaskDefinition
+    DependsOn:
+        - StatsMsTaskDefinition
+
+
+  WebAppService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ClusterName
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 0
+      DesiredCount: 0
+      LaunchType: EC2
+      LoadBalancers:
+        -
+           ContainerName: web-app
+           ContainerPort: 3002
+           TargetGroupArn: !Ref 'WebAppTargetGroupPublic'
+      PlacementConstraints:
+        -
+          Type: distinctInstance
+      PlacementStrategies:
+        -
+          Type: spread
+          Field: host
+      SchedulingStrategy: REPLICA
+      ServiceName: web-app
+      TaskDefinition: !Ref WebAppTaskDefinition
+    DependsOn:
+        - HttpsLoadBalancerListener
+        - WebAppListenerRule
+        - WebAppTargetGroupPublic
+        - WebAppTaskDefinition
+
+
+ # Secrets Manager Creation
+  ApiMsSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties: 
+      Description: Api-Ms Secret
+      KmsKeyId: !Ref ApiMsKey
+      Name:
+        Fn::Sub: '/${Env}/api-ms'
+    DependsOn:
+      - ApiMsKey
+
+  ApprovalsMsSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Approvals-Ms Secret
+      KmsKeyId: !Ref ApprovalsMsKey
+      Name:
+        Fn::Sub: '/${Env}/approvals-ms'
+    DependsOn:
+      - ApprovalsMsKey
+
+
+  CoreMsSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Core-Ms Secret
+      KmsKeyId: !Ref CoreMsKey
+      Name:
+        Fn::Sub: '/${Env}/core-ms'
+    DependsOn:
+      - CoreMsKey
+
+
+  EmailMsSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Email-Ms Secret
+      KmsKeyId: !Ref EmailMsKey
+      Name:
+        Fn::Sub: '/${Env}/email-ms'
+    DependsOn:
+      - EmailMsKey
+
+
+  FeedbackMsSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Feedback-Ms Secret
+      KmsKeyId: !Ref FeedbackMsKey
+      Name:
+        Fn::Sub: '/${Env}/feedback-ms'
+    DependsOn:
+      - FeedbackMsKey
+
+
+  MockyWebsiteSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Mocky-Website Secret
+      KmsKeyId: !Ref MockyWebsiteKey 
+      Name:
+        Fn::Sub: '/${Env}/mocky-website-ms'
+    DependsOn:
+      - MockyWebsiteKey
+
+
+  GatewayMsSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Gateway-Ms Secret
+      KmsKeyId: !Ref GatewayMsKey
+      Name:
+        Fn::Sub: '/${Env}/gateway-ms'
+    DependsOn:
+      - GatewayMsKey
+
+
+  NotifMsSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Notif-Ms Secret
+      KmsKeyId: !Ref NotifMsKey
+      Name:
+        Fn::Sub: '/${Env}/notif-ms'
+    DependsOn:
+      - NotifMsKey
+
+
+  StatsMsSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Stats-Ms Secret
+      KmsKeyId: !Ref StatsMsKey
+      Name:
+        Fn::Sub: '/${Env}/stats-ms'
+    DependsOn:
+      - StatsMsKey
+
+
+  RequestsMsSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Requests-Ms Secret
+      KmsKeyId: !Ref RequestsMsKey
+      Name:
+        Fn::Sub: '/${Env}/requests-ms'
+    DependsOn:
+      - RequestsMsKey
+
+
+  AsMsAccountIdSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_ACCOUNTID
+      Name:
+        Fn::Sub: 'ASMS_ACCOUNTID'
+
+  AsMsApprovalsRdsEndpointSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_APPROVALS_RDS_ENDPOINT
+      Name:
+        Fn::Sub: 'ASMS_APPROVALS_RDS_ENDPOINT'
+
+  AsMsApprovalsRdsUsernameSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_APPROVALS_RDS_USERNAME
+      Name:
+        Fn::Sub: 'ASMS_APPROVALS_RDS_USERNAME'
+
+  AsMsApprovalsRdsPasswordSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_APPROVALS_RDS_PASSWORD
+      Name:
+        Fn::Sub: 'ASMS_APPROVALS_RDS_PASSWORD'
+
+  AsMsAppStoreUrlSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_APPSTOREURL
+      Name:
+        Fn::Sub: 'ASMS_APPSTOREURL'
+
+  AsMsBigRdsMaxPoolSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_BIG_RDS_MAX_POOL
+      Name:
+        Fn::Sub: 'ASMS_BIG_RDS_MAX_POOL'
+
+  AsMsBigRdsMinPoolSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_BIG_RDS_MIN_POOL
+      Name:
+        Fn::Sub: 'ASMS_BIG_RDS_MIN_POOL'
+
+  AsMsCoreRdsEndpointSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_CORE_RDS_ENDPOINT
+      Name:
+        Fn::Sub: 'ASMS_CORE_RDS_ENDPOINT'
+
+  AsMsCoreRdsUsernameSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_CORE_RDS_USERNAME
+      Name:
+        Fn::Sub: 'ASMS_CORE_RDS_USERNAME'
+
+  AsMsCoreRdsPasswordSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_CORE_RDS_PASSWORD
+      Name:
+        Fn::Sub: 'ASMS_CORE_RDS_PASSWORD'
+
+  AsMsDefaultEnvSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_DEFAULTENV
+      Name:
+        Fn::Sub: 'ASMS_DEFAULTENV'
+
+  AsMsFeedbackRdsEndpointSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_FEEDBACK_RDS_ENDPOINT
+      Name:
+        Fn::Sub: 'ASMS_FEEDBACK_RDS_ENDPOINT'
+
+  AsMsFeedbackRdsUsernameSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_FEEDBACK_RDS_USERNAME
+      Name:
+        Fn::Sub: 'ASMS_FEEDBACK_RDS_USERNAME'
+
+  AsMsFeedbackRdsPasswordSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_FEEDBACK_RDS_PASSWORD
+      Name:
+        Fn::Sub: 'ASMS_FEEDBACK_RDS_PASSWORD'
+
+  AsMsFromEmailSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_FROMEMAIL
+      Name:
+        Fn::Sub: 'ASMS_FROMEMAIL'
+
+  AsMsGoogleCaptchaSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_GOOGLE_CAPTCHA
+      Name:
+        Fn::Sub: 'ASMS_GOOGLE_CAPTCHA'
+
+  AsMsKinesisAwsAiSecretsManager:
+   Type: AWS::SecretsManager::Secret
+   Properties:
+      Description: ASMS_KINESISAWSAI
+      Name:
+        Fn::Sub: 'ASMS_KINESISAWSAI'
+
+  AsMsLogLevelSecretsManager:
+   Type: AWS::SecretsManager::Secret
+   Properties:
+      Description: ASMS_LOG_LEVEL
+      Name:
+        Fn::Sub: 'ASMS_LOG_LEVEL'
+
+  AsMsMasterAwsAccountIdSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_MASTER_AWS_ACCOUNT_ID
+      Name:
+        Fn::Sub: 'ASMS_MASTER_AWS_ACCOUNT_ID'
+
+  AsMsPrivateKeyIdSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_PRIVATEKEYID
+      Name:
+        Fn::Sub: 'ASMS_PRIVATEKEYID'
+
+  AsMsRedisEndpointSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_REDIS_ENDPOINT
+      Name:
+        Fn::Sub: 'ASMS_REDIS_ENDPOINT'
+
+  AsMsRedisAuthSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_REDIS_AUTH_TOKEN
+      Name:
+        Fn::Sub: 'ASMS_REDIS_AUTH_TOKEN'
+
+  AsMsRequestsRdsEndpointSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_REQUESTS_RDS_ENDPOINT
+      Name:
+        Fn::Sub: 'ASMS_REQUESTS_RDS_ENDPOINT'
+
+  AsMsRequestsRdsUsernameSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_REQUESTS_RDS_USERNAME
+      Name:
+        Fn::Sub: 'ASMS_REQUESTS_RDS_USERNAME'
+
+  AsMsRequestsRdsPasswordSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_REQUESTS_RDS_PASSWORD
+      Name:
+        Fn::Sub: 'ASMS_REQUESTS_RDS_PASSWORD'
+
+  AsMsS3BucketApprovalsSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_S3BUCKETAPPROVALS
+      Name:
+        Fn::Sub: 'ASMS_S3BUCKETAPPROVALS'
+
+  AsMsS3BucketFeedbackSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_S3BUCKETFEEDBACK
+      Name:
+        Fn::Sub: 'ASMS_S3BUCKETFEEDBACK'
+
+  AsMsS3BucketMockySecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_S3BUCKETMOCKY
+      Name:
+        Fn::Sub: 'ASMS_S3BUCKETMOCKY'
+
+  AsMsS3BucketRequestsSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_S3BUCKETREQUESTS
+      Name:
+        Fn::Sub: 'ASMS_S3BUCKETREQUESTS'
+
+  AsMsSendGridApiSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_SENDGRIDAPIKEY
+      Name:
+        Fn::Sub: 'ASMS_SENDGRIDAPIKEY'
+
+  AsMsSendGridApiSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_SENDGRIDAPIKEY
+      Name:
+        Fn::Sub: 'ASMS_SENDGRIDAPIKEY'
+
+  AsMsSfUsernameSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_SF_USERNAME
+      Name:
+        Fn::Sub: 'ASMS_SF_USERNAME'
+
+  AsMsSfPasswordSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_SF_PASSWORD
+      Name:
+        Fn::Sub: 'ASMS_SF_PASSWORD'
+
+  AsMsSharedAccountSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_SHARED_ACCOUNT
+      Name:
+        Fn::Sub: 'ASMS_SHARED_ACCOUNT'
+
+  AsMsSmallRdsMaxPoolSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_SMALL_RDS_MAX_POOL
+      Name:
+        Fn::Sub: 'ASMS_SMALL_RDS_MAX_POOL'
+
+  AsMsSmallRdsMinPoolSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_SMALL_RDS_MIN_POOL
+      Name:
+        Fn::Sub: 'ASMS_SMALL_RDS_MIN_POOL'
+
+  AsMsStatsRdsEndpointSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_STATS_RDS_ENDPOINT
+      Name:
+        Fn::Sub: 'ASMS_STATS_RDS_ENDPOINT'
+
+  AsMsStatsRdsUsernameSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_STATS_RDS_USERNAME
+      Name:
+        Fn::Sub: 'ASMS_STATS_RDS_USERNAME'
+
+  AsMsStatsRdsPasswordSecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: ASMS_STATS_RDS_PASSWORD
+      Name:
+        Fn::Sub: 'ASMS_STATS_RDS_PASSWORD'
+
+
+# These are the values output by the CloudFormation template. Be careful
+# about changing any of them, because of them are exported with specific
+# names so that the other task related CF templates can use them.
+Outputs:
+  ClusterName:
+    Description: The name of the ECS cluster
+    Value: !Ref 'ECSCluster'
+    Export:
+      Name: !Join [ ':', [ !Ref 'AWS::StackName', 'ClusterName' ] ]
+  ExternalUrl:
+    Description: The url of the external load balancer
+    Value: !Join ['', ['http://', !GetAtt 'PublicLoadBalancer.DNSName']]
+    Export:
+      Name: !Join [ ':', [ !Ref 'AWS::StackName', 'ExternalUrl' ] ]
+  ECSRole:
+    Description: The ARN of the ECS role
+    Value: !GetAtt 'ECSRole.Arn'
+    Export:
+      Name: !Join [ ':', [ !Ref 'AWS::StackName', 'ECSRole' ] ]
+  VPCId:
+    Description: The ID of the VPC that this stack is deployed in
+    Value: !Ref 'VPC'
+    Export:
+      Name: !Join [ ':', [ !Ref 'AWS::StackName', 'VPCId' ] ]
+  PublicSubnetOne:
+    Description: Public subnet one
+    Value: !Ref 'PublicSubnetOne'
+    Export:
+      Name: !Join [ ':', [ !Ref 'AWS::StackName', 'PublicSubnetOne' ] ]
+  PublicSubnetTwo:
+    Description: Public subnet two
+    Value: !Ref 'PublicSubnetTwo'
+    Export:
+      Name: !Join [ ':', [ !Ref 'AWS::StackName', 'PublicSubnetTwo' ] ]
+  PrivateSubnetOne:
+    Description: Private subnet one
+    Value: !Ref 'PrivateSubnetOne'
+    Export:
+      Name: !Join [ ':', [ !Ref 'AWS::StackName', 'PrivateSubnetOne' ] ]
+  PrivateSubnetTwo:
+    Description: Private subnet two
+    Value: !Ref 'PrivateSubnetTwo'
+    Export:
+      Name: !Join [ ':', [ !Ref 'AWS::StackName', 'PrivateSubnetTwo' ] ]
+  EcsHostSecurityGroup:
+    Description: A security group used to allow containers to receive traffic
+    Value: !Ref 'EcsHostSecurityGroup'
+    Export:
+      Name: !Join [ ':', [ !Ref 'AWS::StackName', 'EcsHostSecurityGroup' ] ]

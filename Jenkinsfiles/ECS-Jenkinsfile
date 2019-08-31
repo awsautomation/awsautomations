@@ -1,0 +1,100 @@
+pipeline {
+     //Version 1
+     agent { node { label 'some_jenkins_label' } }
+     options {ansiColor('xterm')}
+     tools {nodejs 'NodeJS 10.15.1'}
+     environment {
+       // GLOBAL
+       MS_NAME = ""
+       ECS_SERVICE_NAME = ""
+       ECS_TASK_DEFINITION_NAME = ""
+       JENKINS_CREDS = ""
+       ECS_TASK_TASKROLEARN = ""
+       ECR_NAME = ""
+       // DEV
+       ECS_ACCOUNT_ID_DEV = ""
+       ECS_CLUSTER_NAME_DEV = ""
+       ECS_REGION_DEV = ""
+       ECR_URI_DEV = ""
+       ECS_EXECUTION_ROLE_DEV = ""
+       ENVIRONMENT= ""
+       AWSPROFILE=''
+       ASMS_REGION=''
+       SECRETSENVIRONMENT=''
+       SECRETSENV=''
+       ASMS_ENV=''
+     }
+//     triggers { pollSCM('H/2 * * * *') }
+     stages {
+         stage ('Checking out Secrets Automations repo') {
+             steps {
+                 checkout([$class: 'GitSCM', branches: [[name: 'master']], doGenerateSubmoduleConfigurations: false, extensions: [[$class: 'RelativeTargetDirectory', relativeTargetDir: 'Automations']], submoduleCfg: [], userRemoteConfigs: [[credentialsId: 'CREDENTIALS_ID', url: 'ASSEMBLA_URL']]])
+             }
+         }
+         stage ('NPM Install and Verify-Sec') {
+             steps {
+                 sh '''#!/bin/bash
+                       npm install
+                       npm run verify-sec'''
+             }
+         }
+         stage ('Build Image - DEV') {
+             steps {
+                  script {
+                        withDockerServer([uri: "unix:///var/run/docker.sock"]) {
+                        withDockerRegistry([credentialsId: "ecr:${ECS_REGION_DEV}:${JENKINS_CREDS}", url: "https://${ECR_URI_DEV}"]) {
+                        image = docker.build("${ECR_URI_DEV}/${ECR_NAME}:${BUILD_NUMBER}")
+                        }
+                  }
+             }
+         }
+      }
+         stage ('Push Image - DEV') {
+             steps {
+             // Push image with Jenkins' docker-plugin
+                   script {
+                         withDockerServer([uri: "unix:///var/run/docker.sock"]) {
+                         withDockerRegistry([credentialsId: "ecr:${ECS_REGION_DEV}:${JENKINS_CREDS}", url: "https://${ECR_URI_DEV}"]) {
+                         image.push("${BUILD_NUMBER}")
+                            }
+                        }
+                    }
+              }
+         }
+         stage ('Loading secrets') {
+             steps {
+                 sh '''#!/bin/bash
+
+                       cat Automations/SecretsManager | sed "s/\$AWSPROFILE/$AWSPROFILE/g;s/\$ASMS_REGION/$ASMS_REGION/g;/\$WORKSPACE/$WORKSPACE/g;s/\$ENVIRONMENT/$ENVIRONMENT/g;s/\$ECS_SERVICE_NAME/$ECS_SERVICE_NAME/g" > Automations/SecretsManager/secretsupdates.sh
+                       cd Automations/SecretsManager
+                       bash secretsupdates.sh'''
+             }
+         }
+         stage ('Deploying new image - DEV') {
+             steps {
+                 sh '''#!/bin/bash
+                       # DESCRIPTION: ECS Deployment Script
+                       # Maintainer: Azary
+
+                       set -e
+
+                       PREVIOUS_TASK_DEF=$(aws ecs describe-task-definition --region "${ECS_REGION}" --task-definition "${ECS_TASK_DEFINITION_NAME}" --profile $AWSPROFILE)
+                       NEW_CONTAINER_DEF=$(echo "${PREVIOUS_TASK_DEF}" | jq \'.taskDefinition.revision=\'\\"$BUILD_NUMBER\\"\' | .taskDefinition.containerDefinitions[].image=\'\\"$ECR_URI/$ECR_NAME:$BUILD_NUMBER\\"\'\')
+
+                       NEW_TASK_DEF=$(echo "$NEW_CONTAINER_DEF" | jq \'.taskDefinition.containerDefinitions\')
+                       NEW_TASK_VOLUMES=$(echo "$NEW_CONTAINER_DEF" | jq \'.taskDefinition.volumes\')
+
+                       CPU=$(echo "$PREVIOUS_TASK_DEF" | jq \'.taskDefinition.cpu\' -r)
+                       MEMORY=$(echo "$PREVIOUS_TASK_DEF" | jq \'.taskDefinition.memory\' -r)
+
+                       echo $NEW_TASK_DEF
+                       echo
+                       echo $NEW_TASK_VOLUMES
+
+                       aws ecs register-task-definition --region "${ECS_REGION}" --family "${ECS_TASK_DEFINITION_NAME}" --container-definitions "${NEW_TASK_DEF}" --volumes "${NEW_TASK_VOLUMES}" --task-role-arn "${ECS_TASK_TASKROLEARN}" --requires-compatibilities "EC2" --network-mode bridge --execution-role-arn "${ECS_EXECUTION_ROLE_DEV}" --profile $AWSPROFILE
+                       aws ecs update-service --region "${ECS_REGION}" --cluster "${ECS_CLUSTER_NAME}" --service "${ECS_SERVICE_NAME}"  --task-definition "${ECS_TASK_DEFINITION_NAME}" --profile $AWSPROFILE
+'''
+             }
+         }
+    }
+}

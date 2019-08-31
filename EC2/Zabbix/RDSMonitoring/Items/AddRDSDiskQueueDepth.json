@@ -1,0 +1,24 @@
+{
+    "jsonrpc": "2.0",
+    "method": "item.create",
+    "params": {
+        "name": "DiskQueueDepth - $TYPE,$ENV,$RDS",
+        "key_": "AWSCloudWatchRDS[DiskQueueDepth,$RDS]",
+        "hostid": "10107",
+        "type": 0,
+        "value_type": 3,
+	"data_type" : 0,
+	"trends": "365",
+	"multiplier": "1",
+	"lifetime": "30",
+      	"history": "90",
+	"formula": "1",
+        "interfaceid": "0",
+        "applications": [
+            "2"
+        ],
+        "delay": 60
+    },
+    "auth": "3d2f6c425d74e6779a910a9fe572d653",
+    "id": 1
+}

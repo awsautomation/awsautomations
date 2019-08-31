@@ -1,0 +1,10 @@
+for i in {22..70} ; do cat AddFirefoxMEMitemadd.json | sed s/\$ID/$i/g >ffjson/ffrealmem$i.json ;done
+for i in {24..70} ; do curl -H "Content-Type: application/json" --data @ffrealmem$i.json http://10.2.104.197/zabbix/api_jsonrpc.php ;done
+cat ffavail.txt | awk -F".replay." '{print $1,$2}' | awk -F".squeues - \[F" '{print $1}' | sed -e s/org/Sessionsperorg\[/g | sed -e s/env/,/g | awk '{print $0"]"}'
+
+
+
+curl -H "Content-Type: application/json" --data @itemsearchinfo.json http://10.2.104.197/zabbix/api_jsonrpc.php  | jq '.result[] | {itemid: .itemid}| tostring' -r | sed -e "s/\}/\},/g" | sed '$s/\,//'
+
+end=$( for i in {1..6} ; do echo -n ${hexchars:$(( $RANDOM % 16 )):1} ; done
+echo $end

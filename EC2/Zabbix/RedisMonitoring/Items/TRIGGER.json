@@ -1,0 +1,12 @@
+{
+    "jsonrpc": "2.0",
+    "method": "trigger.create",
+    "params": {
+        "description": "$DESCRIPTION",
+        "expression": "$EXPRESSION",
+        "comments": "$COMMENTS",
+	"priority": "$PRIORITY"
+    },
+    "auth": "3d2f6c425d74e6779a910a9fe572d653",
+    "id": 1
+}

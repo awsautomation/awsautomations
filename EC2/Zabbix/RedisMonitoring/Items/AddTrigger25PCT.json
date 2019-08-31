@@ -1,0 +1,14 @@
+{
+    "jsonrpc": "2.0",
+    "method": "trigger.create",
+    "params": {
+        "description": "No Firefox Available for $NAME Less then 25%",
+        "expression": "{00__CloudWatch-Redis:AWSCloudWatchRedis[$KEY].last(0)} < (({00__CloudWatch-Redis:AWSCloudWatchRedis[$KEY].max(43200)})/4)",
+	"priority": "4"
+    },
+    "auth": "3d2f6c425d74e6779a910a9fe572d653",
+    "id": 1
+}
+
+
+AWSCloudWatchRedis[BytesUsedForCache,redis-logs,us-west-2]

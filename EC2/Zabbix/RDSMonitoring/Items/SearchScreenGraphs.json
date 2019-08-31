@@ -1,0 +1,13 @@
+{
+    "jsonrpc": "2.0",
+    "method": "graph.get",
+    "params": {
+    "hostids": "19071",
+    "search": {
+            "name": "$GRAPHNAME"
+    },
+    "sortfield": "name"
+    },
+    "auth": "3d2f6c425d74e6779a910a9fe572d653",
+    "id": 1
+}

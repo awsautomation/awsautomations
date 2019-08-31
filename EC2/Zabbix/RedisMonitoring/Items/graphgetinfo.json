@@ -1,0 +1,10 @@
+{
+    "jsonrpc": "2.0",
+    "method": "graph.get",
+    "params": {
+        "graphids": "4464",
+        "output": "extend"
+    },
+    "auth": "3d2f6c425d74e6779a910a9fe572d653",
+    "id": 1
+}

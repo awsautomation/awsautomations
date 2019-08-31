@@ -1,0 +1,18 @@
+{
+    "jsonrpc": "2.0",
+    "method": "graph.create",
+    "params": {
+        "name": "z_Redis - $NAME",
+        "width": 900,
+        "height": 200,
+	"show_work_period": "1",
+	"show_triggers": "0",
+	"graphtype": "0",
+	"show_legend": "1",
+        "gitems": [
+		$GRAPHITEMS
+        ]
+    },
+    "auth": "3d2f6c425d74e6779a910a9fe572d653",
+    "id": 1
+}
