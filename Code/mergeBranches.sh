@@ -1,13 +1,6 @@
 #!/bin/bash
 whoami
 
-
-if [ $REPOS == "service-now-connector" ]
-then
-	touch service-now-connector
-	exit 0
-fi
-
 if [ $BUILD_CAUSE == "TIMERTRIGGER" ]
 then
 
